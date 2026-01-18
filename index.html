@@ -3,41 +3,75 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Chronicle: AI Narrative Engine</title>
-    <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
-    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
-    <script src="https://unpkg.com/babel-standalone@6/babel.min.js"></script>
+    <title>Chronicle: AI Storyteller</title>
+    
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/lucide@latest"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        serif: ['Merriweather', 'serif'],
+                        display: ['Cinzel', 'serif'],
+                    },
+                    animation: {
+                        'fade-in': 'fadeIn 0.8s ease-out',
+                        'nebula': 'nebula 10s ease infinite',
+                    },
+                    keyframes: {
+                        fadeIn: { '0%': { opacity: '0' }, '100%': { opacity: '1' } },
+                        nebula: {
+                            '0%, 100%': { backgroundPosition: '0% 50%' },
+                            '50%': { backgroundPosition: '100% 50%' },
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700&family=Inter:wght@300;400;600&family=Merriweather:ital,wght@0,300;0,400;0,700;1,400&display=swap" rel="stylesheet">
+
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <script type="importmap">
+    {
+        "imports": {
+            "react": "https://esm.sh/react@18.2.0",
+            "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+            "lucide-react": "https://esm.sh/lucide-react@0.292.0"
+        }
+    }
+    </script>
+
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700&family=Inter:wght@300;400;600&family=Merriweather:ital,wght@0,300;0,400;0,700;1,400&display=swap');
-        body { background-color: #000; color: #e2e2e2; font-family: 'Inter', sans-serif; overflow: hidden; }
-        .font-serif { font-family: 'Merriweather', serif; }
-        .font-display { font-family: 'Cinzel', serif; }
-        ::-webkit-scrollbar { width: 6px; }
-        ::-webkit-scrollbar-track { background: #000; }
-        ::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
-        .fade-in { animation: fadeIn 0.8s ease-out; }
-        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-        @keyframes nebula { 0% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } 100% { background-position: 0% 50%; } }
-        .nebula-loader { background: linear-gradient(-45deg, #0f172a, #1e1b4b, #312e81, #0f172a); background-size: 400% 400%; animation: nebula 10s ease infinite; }
-        .nebula-pulse { animation: pulse 2s infinite; }
-        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
+        body { background-color: #000; color: #e5e7eb; }
+        /* Custom Scrollbar */
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #000; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+        .nebula-loader {
+            background: linear-gradient(-45deg, #0f172a, #1e1b4b, #312e81, #0f172a);
+            background-size: 400% 400%;
+        }
     </style>
 </head>
 <body>
     <div id="root"></div>
-    <script type="text/babel">
-        // Paste the FULL AppCanvas code here, but modify the apiKey handling
-        // Since I cannot paste 800 lines again inside a code block easily, 
-        // I will provide the "Adapter" logic you need to swap at the top of the App component.
 
-        const { useState, useEffect, useRef } = React;
-        const { Settings, Book, Image: ImageIcon, Play, Send, Terminal, X, Cpu, Eye, EyeOff, ChevronLeft, ChevronRight, BookOpen, Volume2, VolumeX, FileText, Type, CheckCircle, Flag, Printer, Download, Sparkles, Mic, User, Home, AlertTriangle } = lucide;
+    <script type="text/babel" data-type="module">
+        import React, { useState, useEffect, useRef } from 'react';
+        import ReactDOM from 'react-dom/client';
+        import { 
+            Settings, Book, Image as ImageIcon, Play, Send, Terminal, X, Cpu, 
+            Eye, EyeOff, ChevronLeft, ChevronRight, BookOpen, Volume2, VolumeX, 
+            FileText, Type, CheckCircle, Flag, Printer, Download, Sparkles, 
+            Mic, User, Home, AlertTriangle, Key, Lock
+        } from 'lucide-react';
 
-        // ... [Insert UTILITIES & COMPONENTS from AppCanvas.jsx here] ...
-        
         // --- UTILITIES ---
+
         const pcmToWav = (value, sampleRate = 24000) => {
             const binaryString = atob(value);
             const len = binaryString.length;
@@ -85,6 +119,8 @@
 
         const getVoiceMeta = (name) => VOICE_META[name] || VOICE_META['default'];
 
+        // --- COMPONENTS ---
+
         const Button = ({ children, onClick, variant = 'primary', className = '', disabled = false, title = '' }) => {
             const baseStyle = "px-3 py-2 rounded-lg font-medium transition-all duration-200 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed text-sm";
             const variants = {
@@ -94,64 +130,182 @@
                 ghost: "text-gray-400 hover:text-white hover:bg-gray-800/50",
                 danger: "bg-red-900/50 hover:bg-red-900 text-red-200 border border-red-800"
             };
-            return <button onClick={onClick} disabled={disabled} className={`${baseStyle} ${variants[variant]} ${className}`} title={title}>{children}</button>;
+            return (
+                <button 
+                    onClick={onClick} 
+                    disabled={disabled}
+                    className={`${baseStyle} ${variants[variant]} ${className}`}
+                    title={title}
+                >
+                    {children}
+                </button>
+            );
         };
 
         const Input = ({ value, onChange, placeholder, type = "text", className = "", onKeyDown, disabled }) => (
-            <input type={type} value={value} onChange={onChange} placeholder={placeholder} onKeyDown={onKeyDown} disabled={disabled} className={`w-full bg-gray-900/50 border border-gray-700 rounded-lg px-4 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 transition-all disabled:opacity-50 ${className}`} />
+            <input
+                type={type}
+                value={value}
+                onChange={onChange}
+                placeholder={placeholder}
+                onKeyDown={onKeyDown}
+                disabled={disabled}
+                className={`w-full bg-gray-900/50 border border-gray-700 rounded-lg px-4 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 transition-all disabled:opacity-50 ${className}`}
+            />
         );
 
         const Select = ({ value, onChange, options, label, allowCustom = false, customValue, onCustomChange }) => (
             <div className="flex flex-col gap-2">
                 <label className="text-xs uppercase tracking-wider text-gray-500 font-bold">{label}</label>
                 <div className="grid grid-cols-2 gap-2">
-                    {options.map((opt) => <button key={opt.value} onClick={() => onChange(opt.value)} className={`p-2 rounded-lg text-xs text-left transition-all border ${value === opt.value ? 'bg-blue-900/20 border-blue-500 text-blue-200 shadow-[0_0_15px_rgba(59,130,246,0.15)]' : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700'}`}><div className="font-semibold">{opt.label}</div></button>)}
-                    {allowCustom && <button onClick={() => onChange('custom')} className={`p-2 rounded-lg text-xs text-left transition-all border ${value === 'custom' ? 'bg-blue-900/20 border-blue-500 text-blue-200 shadow-[0_0_15px_rgba(59,130,246,0.15)]' : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700'}`}><div className="font-semibold">Custom...</div></button>}
+                    {options.map((opt) => (
+                        <button
+                            key={opt.value}
+                            onClick={() => onChange(opt.value)}
+                            className={`p-2 rounded-lg text-xs text-left transition-all border ${
+                                value === opt.value 
+                                ? 'bg-blue-900/20 border-blue-500 text-blue-200 shadow-[0_0_15px_rgba(59,130,246,0.15)]' 
+                                : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700'
+                            }`}
+                        >
+                            <div className="font-semibold">{opt.label}</div>
+                        </button>
+                    ))}
+                    {allowCustom && (
+                        <button
+                            onClick={() => onChange('custom')}
+                            className={`p-2 rounded-lg text-xs text-left transition-all border ${
+                                value === 'custom'
+                                ? 'bg-blue-900/20 border-blue-500 text-blue-200 shadow-[0_0_15px_rgba(59,130,246,0.15)]' 
+                                : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700'
+                            }`}
+                        >
+                            <div className="font-semibold">Custom...</div>
+                        </button>
+                    )}
                 </div>
-                {value === 'custom' && allowCustom && <Input value={customValue} onChange={onCustomChange} placeholder={`Describe custom ${label.toLowerCase()}...`} className="mt-1 bg-blue-900/10 border-blue-500/50" />}
+                {value === 'custom' && allowCustom && (
+                    <Input 
+                        value={customValue} 
+                        onChange={onCustomChange} 
+                        placeholder={`Describe custom ${label.toLowerCase()}...`}
+                        className="mt-1 bg-blue-900/10 border-blue-500/50"
+                    />
+                )}
             </div>
         );
 
-        // --- MAIN APP ---
+        // --- AUTH COMPONENT ---
+        const ApiKeyModal = ({ onSave }) => {
+            const [key, setKey] = useState('');
+            
+            return (
+                <div className="min-h-screen w-full bg-black flex flex-col items-center justify-center p-6 relative">
+                     <div className="w-full max-w-md bg-gray-900 border border-gray-800 rounded-2xl p-8 shadow-2xl text-center">
+                        <div className="p-4 bg-blue-900/20 rounded-full inline-block mb-4">
+                            <Lock className="text-blue-400 w-8 h-8" />
+                        </div>
+                        <h1 className="text-2xl font-display font-bold text-white mb-2">Access Required</h1>
+                        <p className="text-gray-400 text-sm mb-6">
+                            This application runs entirely in your browser. To access the AI models, please enter your Google Gemini API Key.
+                        </p>
+                        
+                        <div className="space-y-4">
+                            <div className="text-left">
+                                <label className="text-xs font-bold text-gray-500 uppercase">API Key</label>
+                                <Input 
+                                    type="password" 
+                                    value={key} 
+                                    onChange={(e) => setKey(e.target.value)}
+                                    placeholder="AIzaSy..." 
+                                    className="mt-1"
+                                />
+                            </div>
+                            <Button onClick={() => onSave(key)} disabled={!key} className="w-full py-3">
+                                Enter Simulation
+                            </Button>
+                            <p className="text-[10px] text-gray-600 mt-4">
+                                Your key is saved locally in your browser and is never sent to any server other than Google's API.
+                            </p>
+                            <a href="https://aistudio.google.com/app/apikey" target="_blank" className="text-xs text-blue-500 hover:text-blue-400 underline block">Get a Gemini API Key</a>
+                        </div>
+                    </div>
+                </div>
+            )
+        }
+
+        // --- MAIN APPLICATION ---
+
         const App = () => {
-            // *** API KEY MANAGEMENT FOR WEB APP ***
-            const [apiKey, setApiKey] = useState(localStorage.getItem('gemini_api_key') || '');
-            const [showKeyInput, setShowKeyInput] = useState(false);
-
-            useEffect(() => {
-                if(apiKey) localStorage.setItem('gemini_api_key', apiKey);
-            }, [apiKey]);
-
-            // --- STATE (COPIED FROM APPCANVAS) ---
+            // API Key State
+            const [apiKey, setApiKey] = useState(() => localStorage.getItem('gemini_api_key') || '');
+            
+            // --- STATE ---
             const [view, setView] = useState('setup');
-            const [config, setConfig] = useState({ setting: 'cyberpunk', settingCustom: '', style: 'pixel_art', styleCustom: '', mode: 'choice' });
-            const [prefs, setPrefs] = useState({ narrativeSize: 'text-lg', uiSize: 'text-sm', voice: 'Kore', autoPlay: true, endingLength: 5 });
+            
+            // Config & Prefs
+            const [config, setConfig] = useState({
+                setting: 'cyberpunk',
+                settingCustom: '',
+                style: 'pixel_art',
+                styleCustom: '',
+                mode: 'choice'
+            });
+            const [prefs, setPrefs] = useState({
+                narrativeSize: 'text-lg', 
+                uiSize: 'text-sm',
+                voice: 'Kore',
+                autoPlay: true,
+                endingLength: 5, 
+            });
             const [initialContext, setInitialContext] = useState('');
+
             const [showSettings, setShowSettings] = useState(false);
             const [showExportModal, setShowExportModal] = useState(false);
             const [showExitConfirm, setShowExitConfirm] = useState(false);
             const [exportDetails, setExportDetails] = useState({ title: 'The Unnamed Chronicle', author: 'Anonymous' });
+
+            // Game Logic State
             const [history, setHistory] = useState([]); 
             const [codex, setCodex] = useState({ characters: {}, places: {}, items: {} });
             const [currentSlideIndex, setCurrentSlideIndex] = useState(0);
             const [summary, setSummary] = useState("The story has just begun.");
             const [userInput, setUserInput] = useState('');
+            
+            // Ending State
             const [isEnding, setIsEnding] = useState(false);
             const [turnsRemaining, setTurnsRemaining] = useState(null);
             const [isFinished, setIsFinished] = useState(false);
+
+            // UI/Loading State
             const [loading, setLoading] = useState(false);
             const [generatingAssets, setGeneratingAssets] = useState(false);
+            
+            // Panels
             const [showSummary, setShowSummary] = useState(false);
             const [showCodex, setShowCodex] = useState(false);
+
+            // Audio
             const [isPlaying, setIsPlaying] = useState(false);
             const [previewPlaying, setPreviewPlaying] = useState(false);
             const audioRef = useRef(null);
+
+            // Touch
             const touchStart = useRef(null);
             const touchEnd = useRef(null);
             const minSwipeDistance = 50;
+
+            // Refs
             const textScrollRef = useRef(null);
 
-            // --- EFFECTS (COPIED) ---
+            // Save API Key wrapper
+            const handleSaveApiKey = (key) => {
+                localStorage.setItem('gemini_api_key', key);
+                setApiKey(key);
+            };
+
+            // --- EFFECTS ---
+
             useEffect(() => {
                 let animationFrame;
                 const animateScroll = () => {
@@ -160,29 +314,59 @@
                         if (duration > 0) {
                             const progress = currentTime / duration;
                             const scrollHeight = textScrollRef.current.scrollHeight - textScrollRef.current.clientHeight;
-                            if (scrollHeight > 0) textScrollRef.current.scrollTop = scrollHeight * progress;
+                            if (scrollHeight > 0) {
+                                textScrollRef.current.scrollTop = scrollHeight * progress;
+                            }
                         }
                         animationFrame = requestAnimationFrame(animateScroll);
                     }
                 };
-                if (isPlaying) animationFrame = requestAnimationFrame(animateScroll);
-                else cancelAnimationFrame(animationFrame);
+
+                if (isPlaying) {
+                    animationFrame = requestAnimationFrame(animateScroll);
+                } else {
+                    cancelAnimationFrame(animationFrame);
+                }
+
                 return () => cancelAnimationFrame(animationFrame);
             }, [isPlaying]);
 
-            useEffect(() => { if (history.length > 0) setCurrentSlideIndex(history.length - 1); }, [history.length]);
-            useEffect(() => { if (textScrollRef.current) textScrollRef.current.scrollTop = 0; }, [currentSlideIndex, history]);
+            useEffect(() => {
+                if (history.length > 0) {
+                    setCurrentSlideIndex(history.length - 1);
+                }
+            }, [history.length]);
+
+            useEffect(() => {
+                if (textScrollRef.current) {
+                    textScrollRef.current.scrollTop = 0;
+                }
+            }, [currentSlideIndex, history]); 
+
             useEffect(() => {
                 const currentTurn = history[currentSlideIndex];
-                if (prefs.autoPlay && currentSlideIndex === history.length - 1 && currentTurn?.type === 'ai' && currentTurn.audio && currentTurn.image && !isPlaying) handleSpeak(currentTurn);
+                if (prefs.autoPlay && currentSlideIndex === history.length - 1 && currentTurn?.type === 'ai' && currentTurn.audio && currentTurn.image && !isPlaying) {
+                     handleSpeak(currentTurn);
+                }
             }, [currentSlideIndex, history, prefs.autoPlay]);
 
             // --- API LOGIC ---
-            const voices = ['Kore', 'Fenrir', 'Puck', 'Leda', 'Charon', 'Zephyr', 'Orus']; // Shortened list for brevity in single file
+
+            const voices = [
+                'Kore', 'Fenrir', 'Puck', 'Leda', 'Charon', 'Zephyr', 'Orus', 'Aoede', 
+                'Callirrhoe', 'Autonoe', 'Enceladus', 'Iapetus', 'Umbriel', 'Algieba', 
+                'Despina', 'Erinome', 'Algenib', 'Rasalgethi', 'Laomedeia', 'Achernar', 
+                'Alnilam', 'Schedar', 'Gacrux', 'Pulcherrima', 'Achird', 'Zubenelgenubi', 
+                'Vindemiatrix', 'Sadachbia', 'Sadaltager', 'Sulafat'
+            ];
 
             const callGemini = async (prompt, systemInstruction = "") => {
-                const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
-                const payload = { contents: [{ parts: [{ text: prompt }] }], systemInstruction: { parts: [{ text: systemInstruction }] }, generationConfig: { temperature: 0.8, maxOutputTokens: 2000, responseMimeType: "application/json" } };
+                const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite-preview-02-05:generateContent?key=${apiKey}`;
+                const payload = {
+                    contents: [{ parts: [{ text: prompt }] }],
+                    systemInstruction: { parts: [{ text: systemInstruction }] },
+                    generationConfig: { temperature: 0.8, maxOutputTokens: 2000, responseMimeType: "application/json" }
+                };
                 const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
                 if (!response.ok) throw new Error(`API Error: ${response.status}`);
                 const data = await response.json();
@@ -192,33 +376,68 @@
             const generateImage = async (imagePrompt) => {
                 const stylePrompt = config.style === 'custom' ? config.styleCustom : config.style;
                 const fullPrompt = `Style: ${stylePrompt}. ${imagePrompt}`;
+
                 try {
-                    const url = `https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-generate-001:predict?key=${apiKey}`;
-                    const payload = { instances: [{ prompt: fullPrompt }], parameters: { sampleCount: 1, aspectRatio: "16:9" } };
-                    const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                    const url = `https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key=${apiKey}`;
+                    const payload = { 
+                        instances: [{ prompt: fullPrompt }], 
+                        parameters: { sampleCount: 1, aspectRatio: "16:9" } 
+                    };
+                    
+                    const response = await fetch(url, { 
+                        method: 'POST', 
+                        headers: { 'Content-Type': 'application/json' }, 
+                        body: JSON.stringify(payload) 
+                    });
+
                     if (response.ok) {
                         const data = await response.json();
-                        if (data.predictions?.[0]?.bytesBase64Encoded) return `data:image/png;base64,${data.predictions[0].bytesBase64Encoded}`;
+                        if (data.predictions?.[0]?.bytesBase64Encoded) {
+                            return `data:image/png;base64,${data.predictions[0].bytesBase64Encoded}`;
+                        }
                     }
-                    throw new Error(`Imagen API Error: ${response.status}`);
+                    // Fallback to Flash Image if Imagen fails or isn't enabled
+                    throw new Error("Imagen failed, trying fallback");
                 } catch (e) {
+                    console.warn("Primary image generation failed, trying fallback...", e);
+                    
                     try {
-                        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image-preview:generateContent?key=${apiKey}`;
-                        const payload = { contents: [{ parts: [{ text: fullPrompt }] }], generationConfig: { responseModalities: ["IMAGE"] } };
-                        const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+                        const payload = {
+                            contents: [{ parts: [{ text: `Generate an image: ${fullPrompt}` }] }],
+                            generationConfig: { responseModalities: ["IMAGE"] }
+                        };
+                        const response = await fetch(url, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        });
+
                         if (response.ok) {
                             const data = await response.json();
                             const part = data.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
-                            if (part) return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+                            if (part) {
+                                return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+                            }
                         }
-                    } catch (e2) { console.error("Fallback failed", e2); }
+                    } catch (e2) {
+                        console.error("Fallback image generation failed", e2);
+                    }
                     return null;
                 }
             };
 
             const generateSpeech = async (text, voiceOverride = null) => {
-                const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${apiKey}`;
-                const payload = { contents: [{ parts: [{ text }] }], generationConfig: { responseModalities: ["AUDIO"], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voiceOverride || prefs.voice } } } } };
+                // Warning: TTS is an allowlisted feature on some keys.
+                const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite-preview-02-05:generateContent?key=${apiKey}`;
+                // Using standard generation for TTS if specific TTS model isn't public yet, 
+                // but assuming the user has access to a model that outputs audio or using standard logic.
+                // NOTE: Detailed TTS endpoint logic varies. Using standard endpoint for audio modality.
+                 const payload = {
+                    contents: [{ parts: [{ text: "Read this text aloud: " + text }] }],
+                    generationConfig: { responseModalities: ["AUDIO"], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voiceOverride || prefs.voice } } } }
+                };
+                
                 try {
                     const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
                     if (!response.ok) return null;
@@ -227,106 +446,291 @@
                 } catch { return null; }
             };
 
-            // --- ACTIONS ---
+            // --- GAME ACTIONS ---
+
             const resetGame = () => {
-                setHistory([]); setCodex({ characters: {}, places: {}, items: {} }); setCurrentSlideIndex(0); setSummary("The story has just begun."); setUserInput(''); setIsEnding(false); setTurnsRemaining(null); setIsFinished(false); setLoading(false); setGeneratingAssets(false); setInitialContext(''); stopAudio();
+                setHistory([]);
+                setCodex({ characters: {}, places: {}, items: {} });
+                setCurrentSlideIndex(0);
+                setSummary("The story has just begun.");
+                setUserInput('');
+                setIsEnding(false);
+                setTurnsRemaining(null);
+                setIsFinished(false);
+                setLoading(false);
+                setGeneratingAssets(false);
+                setInitialContext(''); 
+                setExportDetails({ title: 'The Unnamed Chronicle', author: 'Anonymous' });
+                stopAudio();
             };
-            const confirmExit = () => { if (history.length > 0 && !isFinished) setShowExitConfirm(true); else { resetGame(); setView('setup'); } };
+
+            const confirmExit = () => {
+                if (history.length > 0 && !isFinished) {
+                    setShowExitConfirm(true);
+                } else {
+                    resetGame();
+                    setView('setup');
+                }
+            };
+
             const updateCodexState = (updates) => {
                 if (!updates || !Array.isArray(updates)) return;
                 setCodex(prev => {
                     const next = { ...prev };
                     updates.forEach(item => {
                         let catKey = item.category?.toLowerCase();
-                        if (catKey === 'character') catKey = 'characters'; else if (catKey === 'place') catKey = 'places'; else if (catKey === 'item') catKey = 'items';
-                        if (!next[catKey] && next[item.category?.toLowerCase() + 's']) catKey = item.category?.toLowerCase() + 's';
-                        if (next[catKey]) { const existing = next[catKey][item.key] || ""; if (!existing.includes(item.entry)) next[catKey][item.key] = existing ? `${existing}; ${item.entry}` : item.entry; }
+                        if (catKey === 'character') catKey = 'characters';
+                        else if (catKey === 'place') catKey = 'places';
+                        else if (catKey === 'item') catKey = 'items';
+                        
+                        if (!next[catKey] && next[item.category?.toLowerCase() + 's']) {
+                             catKey = item.category?.toLowerCase() + 's';
+                        }
+
+                        if (next[catKey]) {
+                            const existing = next[catKey][item.key] || "";
+                            if (!existing.includes(item.entry)) {
+                                next[catKey][item.key] = existing ? `${existing}; ${item.entry}` : item.entry;
+                            }
+                        }
                     });
                     return next;
                 });
             };
-            const initiateEnding = () => { setIsEnding(true); setTurnsRemaining(prefs.endingLength); alert(`The story will now conclude in ${prefs.endingLength} turns.`); };
+
+            const initiateEnding = () => {
+                setIsEnding(true);
+                setTurnsRemaining(prefs.endingLength);
+                alert(`The story will now conclude in ${prefs.endingLength} turns. Make them count!`);
+            };
+
             const exportBook = () => {
                 const bookWindow = window.open('', '_blank');
-                const html = `<html><head><title>${exportDetails.title}</title><style>@media print{@page{margin:2cm}body{font-family:'Georgia',serif;line-height:1.6}}body{font-family:'Georgia',serif;max-width:800px;margin:0 auto;padding:40px}.title-page{text-align:center;margin:40vh 0}.chapter{margin-top:4em;page-break-before:always}.chapter-img{width:100%;max-height:500px;object-fit:contain}</style></head><body><div class="title-page"><h1>${exportDetails.title}</h1><h2>by ${exportDetails.author}</h2></div>${history.map((t,i)=>`<div class="chapter"><h3>Page ${i+1}</h3>${t.image?`<img src="${t.image}" class="chapter-img"/>`:''}<div class="text">${t.narrative.replace(/\n/g,'<br/>')}</div></div>`).join('')}<script>window.onload=()=>{setTimeout(()=>window.print(),1000)}<\/script></body></html>`;
-                bookWindow.document.write(html); bookWindow.document.close();
+                const html = `
+                    <html>
+                    <head>
+                        <title>${exportDetails.title} - Book Export</title>
+                        <style>
+                            @media print {
+                                @page { margin: 2cm; size: A4; }
+                                body { font-family: 'Georgia', serif; line-height: 1.6; color: #000; background: #fff; }
+                                .page-break { page-break-before: always; }
+                                a { text-decoration: none; color: #000; }
+                            }
+                            body { font-family: 'Georgia', serif; max-width: 800px; mx-auto; padding: 40px; }
+                            .title-page { text-align: center; margin-top: 40vh; margin-bottom: 40vh; }
+                            .title-page h1 { font-size: 3em; margin-bottom: 0.5em; }
+                            .title-page h2 { font-size: 1.5em; font-weight: normal; font-style: italic; }
+                            .toc { margin-top: 4em; }
+                            .chapter-link { display: block; padding: 0.5em 0; border-bottom: 1px dotted #ccc; }
+                            .chapter { margin-top: 4em; }
+                            .chapter-img { width: 100%; max-height: 500px; object-fit: contain; margin: 2em 0; border: 1px solid #eee; }
+                            .chapter-text { font-size: 1.1em; text-align: justify; }
+                        </style>
+                    </head>
+                    <body>
+                        <div class="title-page">
+                            <h1>${exportDetails.title}</h1>
+                            <h2>by ${exportDetails.author}</h2>
+                            <p style="margin-top: 2em; font-size: 0.8em; color: #666;">Generated by Chronicle AI</p>
+                        </div>
+
+                        <div class="page-break"></div>
+
+                        <div class="toc">
+                            <h1>Table of Contents</h1>
+                            ${history.map((turn, i) => `<a href="#ch${i+1}" class="chapter-link">Page ${i+1}</a>`).join('')}
+                        </div>
+
+                        <div class="page-break"></div>
+
+                        ${history.map((turn, i) => `
+                            <div id="ch${i+1}" class="chapter ${i > 0 ? 'page-break' : ''}">
+                                <h3>Page ${i+1}</h3>
+                                ${turn.image ? `<img src="${turn.image}" class="chapter-img" alt="Illustration" />` : ''}
+                                <div class="chapter-text">${turn.narrative.replace(/\n/g, '<br/>')}</div>
+                            </div>
+                        `).join('')}
+
+                        <script>
+                            window.onload = () => { setTimeout(() => window.print(), 1000); };
+                        <\/script>
+                    </body>
+                    </html>
+                `;
+                bookWindow.document.write(html);
+                bookWindow.document.close();
             };
 
             const processTurn = async (promptType, inputVal) => {
-                stopAudio(); setLoading(true);
-                let systemPrompt = `You are an advanced AI Game Master. GENRE: ${config.setting==='custom'?config.settingCustom:config.setting}, Style: ${config.style==='custom'?config.styleCustom:config.style}. CONTEXT: ${summary}. Codex: ${JSON.stringify(codex)}. INSTRUCTIONS: Advance story. Maintain Codex. OUTPUT JSON: { "narrative": "Story text.", "choices": ["Option 1", "Option 2", "Option 3", "Option 4"], "summary_update": "Update summary.", "image_prompt": "Visual desc.", "codex_updates": [ { "category": "character|place|item", "key": "Name", "entry": "Trait" } ] } CRITICAL: Provide exactly 4 choices if in choice mode. CRITICAL: For Codex, only NEW details.`;
-                if (isEnding) systemPrompt += ` CRITICAL: ENDING in ${turnsRemaining} turns. Wrap up plot.`;
+                stopAudio();
+                setLoading(true);
                 
+                let systemPrompt = getSystemPrompt();
+                if (isEnding) {
+                    if (turnsRemaining > 1) {
+                        systemPrompt += `\nCRITICAL: The story is ENDING. You have ${turnsRemaining} turns remaining. Begin wrapping up plot threads.`;
+                    } else if (turnsRemaining === 1) {
+                        systemPrompt += `\nCRITICAL: This is the PENULTIMATE turn. Set the stage for the finale.`;
+                    } else {
+                        systemPrompt += `\nCRITICAL: This is the FINAL turn. Provide a satisfying conclusion to the story. DO NOT provide any choices in the JSON response.`;
+                    }
+                }
+
                 try {
                     const turnData = await callGemini(inputVal, systemPrompt);
                     updateCodexState(turnData.codex_updates);
                     setSummary(prev => isEnding ? turnData.summary_update : prev + " " + turnData.summary_update);
-                    const newTurn = { ...turnData, image: null, audio: null, type: 'ai', userActionPreceding: promptType === 'initial' ? null : inputVal };
+                    
+                    const newTurn = { 
+                        ...turnData, 
+                        image: null, 
+                        audio: null, 
+                        type: 'ai', 
+                        userActionPreceding: promptType === 'initial' ? null : inputVal 
+                    };
+
                     setHistory(prev => [...prev, newTurn]);
-                    if (promptType === 'initial') { setCurrentSlideIndex(0); setView('game'); } else { setCurrentSlideIndex(prev => prev + 1); }
-                    setLoading(false); setGeneratingAssets(true);
                     
-                    const [imageUrl, audioBlob] = await Promise.all([generateImage(turnData.image_prompt), prefs.autoPlay ? generateSpeech(turnData.narrative) : null]);
-                    setHistory(prev => { const updated = [...prev]; const index = updated.length - 1; if(updated[index]) updated[index] = { ...updated[index], image: imageUrl, audio: audioBlob }; return updated; });
-                    
+                    if (promptType === 'initial') {
+                        setCurrentSlideIndex(0);
+                        setView('game'); 
+                    } else {
+                        setCurrentSlideIndex(prev => prev + 1);
+                    }
+
+                    setLoading(false); 
+                    setGeneratingAssets(true); 
+
+                    const imagePromise = generateImage(turnData.image_prompt);
+                    const audioPromise = prefs.autoPlay ? generateSpeech(turnData.narrative) : Promise.resolve(null);
+
+                    const [imageUrl, audioBlob] = await Promise.all([imagePromise, audioPromise]);
+
+                    setHistory(prev => {
+                        const updated = [...prev];
+                        const index = updated.length - 1; 
+                        if (updated[index]) {
+                            updated[index] = { ...updated[index], image: imageUrl, audio: audioBlob };
+                        }
+                        return updated;
+                    });
+
                     if (isEnding) {
-                        setTurnsRemaining(t => t - 1);
-                        if (turnsRemaining <= 1) {
+                        const nextTurns = turnsRemaining - 1;
+                        setTurnsRemaining(nextTurns);
+                        
+                        if (nextTurns <= 0) {
                             setIsFinished(true);
-                            try { const titleData = await callGemini(`Generate a book title for summary: ${summary}. JSON: {"title":"T"}`, "JSON only"); if(titleData.title) setExportDetails(prev => ({...prev, title: titleData.title})); } catch(e){}
+                            setTurnsRemaining(0); 
+                            
+                            try {
+                                const titleData = await callGemini(`Generate a short, creative book title for this story based on the summary: "${summary}". Output JSON: {"title": "The Title"}`, "Output JSON only.");
+                                if (titleData.title) setExportDetails(prev => ({ ...prev, title: titleData.title }));
+                            } catch(e) { console.error("Title gen failed", e); }
                         }
                     }
-                } catch (error) { alert("Error: " + error.message); setLoading(false); } finally { setGeneratingAssets(false); setUserInput(''); }
+
+                } catch (error) {
+                    console.error(error);
+                    alert("Error processing turn. Please check your API key or try again.");
+                    setLoading(false);
+                } finally {
+                    setGeneratingAssets(false);
+                    setUserInput('');
+                }
+            };
+
+            const startGame = () => processTurn('initial', `Start the story. Context: ${initialContext}`);
+            const handleTurn = (input) => processTurn('continue', `User action: "${input}". Continue story.`);
+
+            const getSystemPrompt = () => {
+                const settingVal = config.setting === 'custom' ? config.settingCustom : config.setting;
+                const styleVal = config.style === 'custom' ? config.styleCustom : config.style;
+                return `
+                    You are an advanced AI Game Master.
+                    GENRE: ${settingVal}, Visual Style: ${styleVal}
+                    CONTEXT: ${summary}. Codex: ${JSON.stringify(codex)}
+                    INSTRUCTIONS: Advance story. Maintain Codex.
+                    OUTPUT JSON: {
+                        "narrative": "Story text.",
+                        "choices": ["Option 1", "Option 2", "Option 3", "Option 4"],
+                        "summary_update": "Update summary.",
+                        "image_prompt": "Visual desc.",
+                        "codex_updates": [ { "category": "character|place|item", "key": "Name", "entry": "Trait" } ]
+                    }
+                    CRITICAL: Provide exactly 4 distinct choices if in choice mode, else empty.
+                    CRITICAL: For Codex updates, provide ONLY specific NEW details or state changes. Do NOT repeat what is already known in the Codex.
+                `;
             };
 
             const handleSpeak = async (turn) => {
-                if (!turn) return; if (isPlaying) { stopAudio(); return; } setIsPlaying(true);
-                let wavBlob = turn.audio; if (!wavBlob) { wavBlob = await generateSpeech(turn.narrative); if(wavBlob) setHistory(prev => prev.map(t => t === turn ? { ...t, audio: wavBlob } : t)); }
-                if (wavBlob) { const audio = new Audio(URL.createObjectURL(wavBlob)); audioRef.current = audio; audio.play(); audio.onended = () => setIsPlaying(false); } else setIsPlaying(false);
-            };
-            const stopAudio = () => { if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; } setIsPlaying(false); };
-            const previewVoice = async (v) => { if(audioRef.current) audioRef.current.pause(); setPreviewPlaying(true); const blob = await generateSpeech(`Hello, I am ${v}.`, v); if(blob) { const a = new Audio(URL.createObjectURL(blob)); a.play(); a.onended = () => setPreviewPlaying(false); } else setPreviewPlaying(false); };
+                if (!turn) return;
+                
+                if (isPlaying) { 
+                    stopAudio(); 
+                    return; 
+                }
 
-            // Render logic identical to Canvas version but with apiKey input in Setup
-            // ... (Abbreviated for file size - logic is identical to AppCanvas.jsx)
-            
-            // Injecting API Key Input into Setup View:
-            if (view === 'setup') {
-                return (
-                    <div className="min-h-screen w-full bg-black flex flex-col items-center justify-center p-6 text-gray-200 font-sans relative">
-                        <div className="w-full max-w-2xl bg-gray-900 border border-gray-800 rounded-2xl p-8 shadow-2xl">
-                            {/* ... Header ... */}
-                            <div className="bg-gray-950 p-4 rounded-xl border border-gray-800 mb-6">
-                                <label className="block text-xs uppercase text-blue-400 font-bold mb-2">Google Gemini API Key (Required)</label>
-                                <div className="relative">
-                                    <Input type={showKeyInput ? "text" : "password"} value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="Enter key..." className="bg-gray-900/50" />
-                                    <button onClick={() => setShowKeyInput(!showKeyInput)} className="absolute right-3 top-2.5 text-gray-500">{showKeyInput ? <EyeOff size={16}/> : <Eye size={16} />}</button>
-                                </div>
-                            </div>
-                            {/* ... Rest of Setup ... */}
-                            <div className="grid md:grid-cols-2 gap-6 mb-6">
-                                <Select label="Genre" value={config.setting} onChange={(v) => setConfig({...config, setting: v})} allowCustom={true} customValue={config.settingCustom} onCustomChange={(e) => setConfig({...config, settingCustom: e.target.value})} options={[{ value: 'fantasy', label: 'High Fantasy' }, { value: 'cyberpunk', label: 'Cyberpunk' }, { value: 'noir', label: 'Noir Detective' }, { value: 'scifi', label: 'Space Opera' }, { value: 'lovecraft', label: 'Eldritch Horror' }, { value: 'postapoc', label: 'Wasteland' }]} />
-                                <Select label="Visual Style" value={config.style} onChange={(v) => setConfig({...config, style: v})} allowCustom={true} customValue={config.styleCustom} onCustomChange={(e) => setConfig({...config, styleCustom: e.target.value})} options={[{ value: 'cinematic', label: 'Cinematic' }, { value: 'pixel_art', label: 'Pixel Art' }, { value: 'watercolor', label: 'Watercolor' }, { value: 'comic', label: 'Graphic Novel' }, { value: 'oil_painting', label: 'Oil Painting' }, { value: 'blueprint', label: 'Blueprint' }]} />
-                            </div>
-                            <div className="mb-6">
-                                <label className="text-xs uppercase tracking-wider text-gray-500 font-bold mb-2 block">CONTEXT (OPTIONAL)</label>
-                                <textarea value={initialContext} onChange={(e) => setInitialContext(e.target.value)} placeholder="e.g. Waking up in a cryopod on a derelict ship..." className="w-full bg-gray-950 border border-gray-800 rounded-lg p-3 text-sm text-gray-300 focus:outline-none focus:border-blue-500 resize-none h-24" />
-                            </div>
-                            <Button onClick={() => processTurn('initial', `Start story. Context: ${initialContext}`)} className="w-full py-4 text-lg mt-6" disabled={loading || !apiKey}>{loading ? "Initializing..." : "Begin Simulation"}</Button>
-                        </div>
-                        {showSettings && renderSettings()}
-                    </div>
-                );
+                setIsPlaying(true);
+                let wavBlob = turn.audio;
+                
+                if (!wavBlob) { 
+                    wavBlob = await generateSpeech(turn.narrative); 
+                    if (wavBlob) {
+                        setHistory(prev => prev.map(t => t === turn ? { ...t, audio: wavBlob } : t));
+                    }
+                }
+                
+                if (wavBlob) {
+                    const audioUrl = URL.createObjectURL(wavBlob);
+                    const audio = new Audio(audioUrl);
+                    audioRef.current = audio;
+                    audio.play();
+                    audio.onended = () => setIsPlaying(false);
+                } else { 
+                    setIsPlaying(false); 
+                }
+            };
+
+            const previewVoice = async (voiceName) => {
+                if (audioRef.current) audioRef.current.pause();
+                setPreviewPlaying(true);
+                const wavBlob = await generateSpeech(`Hello, this is ${voiceName}.`, voiceName);
+                if (wavBlob) {
+                    const audioUrl = URL.createObjectURL(wavBlob);
+                    const audio = new Audio(audioUrl);
+                    audio.play();
+                    audio.onended = () => setPreviewPlaying(false);
+                } else { setPreviewPlaying(false); }
+            };
+
+            const stopAudio = () => {
+                if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
+                setIsPlaying(false);
+            };
+
+            const nextSlide = () => { if (currentSlideIndex < history.length - 1) setCurrentSlideIndex(c => c + 1); };
+            const prevSlide = () => { if (currentSlideIndex > 0) setCurrentSlideIndex(c => c - 1); };
+            const onTouchStart = (e) => { touchEnd.current = null; touchStart.current = e.targetTouches[0].clientX; }
+            const onTouchMove = (e) => { touchEnd.current = e.targetTouches[0].clientX; }
+            const onTouchEnd = () => {
+                if (!touchStart.current || !touchEnd.current) return;
+                if (touchStart.current - touchEnd.current > minSwipeDistance) nextSlide();
+                else if (touchStart.current - touchEnd.current < -minSwipeDistance) prevSlide();
             }
 
-            // ... (Rest of Main View Render is identical to AppCanvas) ...
-            // For the sake of the single-file request, assume the render logic matches AppCanvas exactly
-            // excluding the apiKey hardcode.
-            
-            // Helper for Settings Render (Internal to App)
+            const currentTurnData = history[currentSlideIndex];
+            const isLatestSlide = currentSlideIndex === history.length - 1;
+
+            // --- RENDER ---
+
+            if (!apiKey) {
+                return <ApiKeyModal onSave={handleSaveApiKey} />;
+            }
+
             const renderSettings = () => (
                 <div className="absolute top-14 right-4 w-80 bg-gray-900 border border-gray-800 rounded-xl shadow-2xl z-50 p-4 overflow-y-auto max-h-[80vh] custom-scrollbar">
-                    {/* ... Settings UI ... */}
                     <div className="flex justify-between items-center mb-4">
                         <h3 className="text-xs font-bold uppercase text-gray-500 flex items-center gap-2"><Settings size={12}/> Preferences</h3>
                         <button onClick={() => setShowSettings(false)}><X size={14} className="text-gray-500 hover:text-white"/></button>
@@ -381,77 +785,147 @@
                 </div>
             );
 
-            // Re-implement main render here mirroring AppCanvas.jsx structure
-            return (
-                <div className="h-screen w-full flex flex-col md:flex-row bg-black text-gray-200 font-sans" onTouchStart={()=>{}} onTouchMove={()=>{}} onTouchEnd={()=>{}}>
-                    {/* ... Copy main render from AppCanvas.jsx ... */}
-                    {/* For brevity in this response, assume exact copy of the JSX structure from AppCanvas.jsx */}
-                    {/* Main Container, Header, Image Area, Text Area, Footer, Modals */}
-                    {/* Ensure 'apiKey' check is used where appropriate */}
-                    <div className="flex-1 flex flex-col h-full relative z-10 bg-black min-w-0">
-                        {/* HEADER */}
-                        <div className="h-12 border-b border-gray-800 bg-gray-950 flex items-center justify-between px-4 shrink-0 z-20 relative">
-                            {/* ... same header ... */}
-                            <div className="flex items-center gap-4">
-                                <div className="text-gray-500 text-xs font-bold tracking-widest uppercase truncate max-w-[100px] md:max-w-none">{config.setting === 'custom' ? config.settingCustom : config.setting}</div>
-                                {isFinished && <button onClick={() => { setView('setup'); resetGame(); }} className="text-gray-500 hover:text-white p-1" title="Back to Home"><Home size={16} /></button>}
+            if (view === 'setup') {
+                return (
+                     <div className="min-h-screen w-full bg-black flex flex-col items-center justify-center p-6 text-gray-200 font-sans relative">
+                        <div className="absolute top-6 right-6">
+                            <button onClick={() => setShowSettings(!showSettings)} className="p-2 bg-gray-900 rounded-lg text-gray-400 hover:text-white border border-gray-800 hover:border-blue-500/50 transition-all">
+                                <Settings size={20} />
+                            </button>
+                        </div>
+
+                        <div className="w-full max-w-2xl bg-gray-900 border border-gray-800 rounded-2xl p-8 shadow-2xl">
+                            <div className="flex items-center gap-3 mb-8">
+                                <div className="p-3 bg-blue-600 rounded-lg"><Cpu className="text-white" /></div>
+                                <div><h1 className="text-3xl font-display font-bold text-white">CHRONICLE</h1><p className="text-gray-500 text-sm uppercase tracking-widest">Canvas Edition</p></div>
                             </div>
-                            <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-xs text-gray-500 uppercase tracking-widest font-bold hidden md:block">Page {currentSlideIndex + 1} of {history.length || 1}</div>
+                              
+                             <div className="grid md:grid-cols-2 gap-6 mb-6">
+                                    <Select label="Genre" value={config.setting} onChange={(v) => setConfig({...config, setting: v})} allowCustom={true} customValue={config.settingCustom} onCustomChange={(e) => setConfig({...config, settingCustom: e.target.value})} options={[{ value: 'fantasy', label: 'High Fantasy' }, { value: 'cyberpunk', label: 'Cyberpunk' }, { value: 'noir', label: 'Noir Detective' }, { value: 'scifi', label: 'Space Opera' }, { value: 'lovecraft', label: 'Eldritch Horror' }, { value: 'postapoc', label: 'Wasteland' }]} />
+                                    <Select label="Visual Style" value={config.style} onChange={(v) => setConfig({...config, style: v})} allowCustom={true} customValue={config.styleCustom} onCustomChange={(e) => setConfig({...config, styleCustom: e.target.value})} options={[{ value: 'cinematic', label: 'Cinematic' }, { value: 'pixel_art', label: 'Pixel Art' }, { value: 'watercolor', label: 'Watercolor' }, { value: 'comic', label: 'Graphic Novel' }, { value: 'oil_painting', label: 'Oil Painting' }, { value: 'blueprint', label: 'Blueprint' }]} />
+                            </div>
+
+                            <div className="mb-6">
+                                <label className="text-xs uppercase tracking-wider text-gray-500 font-bold mb-2 block">CONTEXT (OPTIONAL)</label>
+                                <textarea 
+                                    value={initialContext} 
+                                    onChange={(e) => setInitialContext(e.target.value)} 
+                                    placeholder="e.g. Waking up in a cryopod on a derelict ship..."
+                                    className="w-full bg-gray-950 border border-gray-800 rounded-lg p-3 text-sm text-gray-300 focus:outline-none focus:border-blue-500 resize-none h-24"
+                                />
+                             </div>
+
+                            <Button onClick={startGame} className="w-full py-4 text-lg mt-6" disabled={loading}>{loading ? "Initializing..." : "Begin Simulation"}</Button>
+                        </div>
+                        {showSettings && renderSettings()}
+                    </div>
+                );
+            }
+
+            return (
+                <div className="h-screen w-full flex flex-col md:flex-row bg-black text-gray-200 font-sans" onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}>
+                    <div className="flex-1 flex flex-col h-full relative z-10 bg-black min-w-0">
+                        <div className="h-12 border-b border-gray-800 bg-gray-950 flex items-center justify-between px-4 shrink-0 z-20 relative">
+                            <div className="flex items-center gap-4">
+                                 <div className="text-gray-500 text-xs font-bold tracking-widest uppercase truncate max-w-[100px] md:max-w-none">{config.setting === 'custom' ? config.settingCustom : config.setting}</div>
+                                 <button onClick={confirmExit} className="text-gray-500 hover:text-white p-1" title="Back to Home"><Home size={16} /></button>
+                            </div>
+                            
+                            <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-xs text-gray-500 uppercase tracking-widest font-bold hidden md:block">
+                                Page {currentSlideIndex + 1} of {history.length || 1}
+                            </div>
+
                             <div className="flex gap-2 items-center">
-                                {!isEnding && !isFinished && history.length > 0 && <button onClick={initiateEnding} className="text-xs bg-red-900/30 text-red-400 border border-red-900/50 px-3 py-1 rounded hover:bg-red-900/50 flex items-center gap-2 mr-2"><Flag size={12}/> End</button>}
-                                {isEnding && !isFinished && <div className="text-xs text-red-500 font-bold tracking-widest animate-pulse mr-2">END: {turnsRemaining}</div>}
-                                {isFinished && <button onClick={() => setShowExportModal(true)} className="text-xs bg-emerald-900/30 text-emerald-400 border border-emerald-900/50 px-3 py-1 rounded hover:bg-emerald-900/50 flex items-center gap-2 mr-2"><Printer size={12}/> Book</button>}
-                                <button onClick={() => setShowSettings(!showSettings)} className="p-1.5 rounded hover:bg-gray-800 text-gray-500"><Settings size={16}/></button>
-                                <button onClick={() => {setShowCodex(!showCodex); setShowSummary(false);}} className="p-1.5 rounded hover:bg-gray-800 text-gray-500"><BookOpen size={16}/></button>
-                                <button onClick={() => {setShowSummary(!showSummary); setShowCodex(false);}} className="p-1.5 rounded hover:bg-gray-800 text-gray-500"><FileText size={16}/></button>
+                                {!isEnding && !isFinished && history.length > 0 && (
+                                    <button onClick={initiateEnding} className="text-xs bg-red-900/30 text-red-400 border border-red-900/50 px-3 py-1 rounded hover:bg-red-900/50 flex items-center gap-2 mr-2">
+                                        <Flag size={12}/> End
+                                    </button>
+                                )}
+                                {isEnding && !isFinished && (
+                                    <div className="text-xs text-red-500 font-bold tracking-widest animate-pulse mr-2">
+                                        END: {turnsRemaining}
+                                    </div>
+                                )}
+                                {isFinished && (
+                                    <button onClick={() => setShowExportModal(true)} className="text-xs bg-emerald-900/30 text-emerald-400 border border-emerald-900/50 px-3 py-1 rounded hover:bg-emerald-900/50 flex items-center gap-2 mr-2">
+                                        <Printer size={12}/> Book
+                                    </button>
+                                )}
+
+                                <button onClick={() => setShowSettings(!showSettings)} className={`p-1.5 rounded hover:bg-gray-800 ${showSettings ? 'text-blue-400' : 'text-gray-500'}`} title="Settings"><Settings size={16} /></button>
+                                 <button onClick={() => { setShowCodex(!showCodex); setShowSummary(false); setShowSettings(false); }} className={`p-1.5 rounded hover:bg-gray-800 ${showCodex ? 'text-blue-400' : 'text-gray-500'}`} title="Codex"><BookOpen size={16} /></button>
+                                <button onClick={() => { setShowSummary(!showSummary); setShowCodex(false); setShowSettings(false); }} className={`p-1.5 rounded hover:bg-gray-800 ${showSummary ? 'text-blue-400' : 'text-gray-500'}`} title="Summary"><FileText size={16} /></button>
                             </div>
                         </div>
 
-                        {/* IMAGE */}
                         <div className="h-[40vh] md:h-[45vh] bg-black border-b border-gray-900 relative shrink-0 group overflow-hidden">
                             {currentTurnData ? (
                                 currentTurnData.image ? (
-                                    <div className="w-full h-full relative"><img src={currentTurnData.image} className="w-full h-full object-contain mx-auto bg-black fade-in"/><div className="absolute inset-0 pointer-events-none bg-[radial-gradient(circle_at_center,transparent_50%,rgba(0,0,0,0.4)_100%)]"></div></div>
+                                    <div className="w-full h-full relative">
+                                        <img src={currentTurnData.image} alt="Scene" className="w-full h-full object-contain mx-auto bg-black fade-in" />
+                                        <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(circle_at_center,transparent_50%,rgba(0,0,0,0.4)_100%)]"></div>
+                                    </div>
                                 ) : (
                                     <div className="w-full h-full flex flex-col items-center justify-center text-blue-200 gap-4 nebula-loader relative">
-                                        <Sparkles size={48} className="nebula-pulse opacity-80"/><span className="text-xs uppercase tracking-[0.3em] font-bold opacity-80 text-shadow-lg">{generatingAssets ? "Manifesting Reality..." : "Constructing Visuals..."}</span>
+                                        <Sparkles size={48} className="nebula-pulse opacity-80"/>
+                                        <span className="text-xs uppercase tracking-[0.3em] font-bold opacity-80 text-shadow-lg">
+                                            {generatingAssets ? "Manifesting Reality..." : "Constructing Visuals..."}
+                                        </span>
                                     </div>
                                 )
-                            ) : (<div className="w-full h-full flex items-center justify-center text-gray-800"><span className="animate-pulse">Waiting...</span></div>)}
-                            <div className="absolute bottom-4 left-4 z-20"><Button variant="secondary" onClick={()=>{if(currentSlideIndex>0)setCurrentSlideIndex(c=>c-1)}} disabled={currentSlideIndex===0} className="w-10 h-10 rounded-full !p-0 shadow-xl"><ChevronLeft size={20}/></Button></div>
-                            <div className="absolute bottom-4 right-4 z-20"><Button variant="secondary" onClick={()=>{if(currentSlideIndex<history.length-1)setCurrentSlideIndex(c=>c+1)}} disabled={currentSlideIndex===history.length-1} className="w-10 h-10 rounded-full !p-0 shadow-xl"><ChevronRight size={20}/></Button></div>
+                            ) : (
+                                <div className="w-full h-full flex items-center justify-center text-gray-800"><span className="animate-pulse">Waiting...</span></div>
+                            )}
+
+                            <div className="absolute bottom-4 left-4 z-20"><Button variant="secondary" onClick={prevSlide} disabled={currentSlideIndex === 0} className="w-10 h-10 rounded-full !p-0 shadow-xl"><ChevronLeft size={20} /></Button></div>
+                            <div className="absolute bottom-4 right-4 z-20"><Button variant="secondary" onClick={nextSlide} disabled={currentSlideIndex === history.length - 1} className="w-10 h-10 rounded-full !p-0 shadow-xl"><ChevronRight size={20} /></Button></div>
                         </div>
 
-                        {/* TEXT */}
                         <div className="flex-1 flex flex-col min-h-0 relative">
                             {currentTurnData && (
                                 <div className="absolute top-4 right-6 z-30">
-                                    <button onClick={() => handleSpeak(currentTurnData)} className={`p-3 rounded-full shadow-lg transition-all duration-300 backdrop-blur-md border ${isPlaying ? 'bg-blue-600/90 text-white border-blue-400 scale-110' : 'bg-black/60 text-gray-400 border-gray-700 hover:text-white hover:bg-black/80'} ${generatingAssets && !currentTurnData.audio ? 'opacity-50 cursor-not-allowed' : ''}`} disabled={generatingAssets && !currentTurnData.audio}>{isPlaying ? <VolumeX size={20}/> : <Volume2 size={20}/>}</button>
+                                    <button 
+                                        onClick={() => handleSpeak(currentTurnData)} 
+                                        className={`p-3 rounded-full shadow-lg transition-all duration-300 backdrop-blur-md border ${isPlaying 
+                                            ? 'bg-blue-600/90 text-white border-blue-400 scale-110' 
+                                            : 'bg-black/60 text-gray-400 border-gray-700 hover:text-white hover:bg-black/80'} 
+                                            ${generatingAssets && !currentTurnData.audio ? 'opacity-50 cursor-not-allowed' : ''}`} 
+                                        title="Read Aloud" 
+                                        disabled={generatingAssets && !currentTurnData.audio}
+                                    >
+                                        {isPlaying ? <VolumeX size={20} /> : <Volume2 size={20} />}
+                                    </button>
                                 </div>
                             )}
+
                             <div ref={textScrollRef} className="flex-1 overflow-y-auto bg-black p-6 md:p-8 custom-scrollbar">
                                 <div className="max-w-3xl mx-auto flex flex-col items-center text-center fade-in">
-                                    {currentTurnData && <div className="prose prose-invert prose-p:text-gray-300 prose-p:font-serif prose-p:leading-loose w-full">{currentTurnData.narrative.split('\n').map((line,i)=><p key={i} className={`mb-4 leading-relaxed text-gray-300 font-serif ${prefs.narrativeSize}`}>{line}</p>)}</div>}
+                                    {currentTurnData && (
+                                        <div className="prose prose-invert prose-p:text-gray-300 prose-p:font-serif prose-p:leading-loose w-full">
+                                            {currentTurnData.narrative.split('\n').map((line, i) => <p key={i} className={`mb-4 leading-relaxed text-gray-300 font-serif ${prefs.narrativeSize}`}>{line}</p>)}
+                                        </div>
+                                    )}
                                 </div>
                             </div>
                         </div>
 
-                        {/* FOOTER */}
                         <div className="shrink-0 bg-black border-t border-gray-900 p-4 md:p-6 z-20 relative">
-                            <div className="max-w-3xl mx-auto w-full">
+                              <div className="max-w-3xl mx-auto w-full">
                                 {isLatestSlide && !loading && !isFinished && !generatingAssets && (
                                     <div className="fade-in">
                                         {config.mode === 'choice' && currentTurnData?.choices?.length > 0 && (
                                             <div className="grid grid-cols-2 gap-3">
-                                                {currentTurnData.choices.slice(0,4).map((c, i) => (
-                                                    <button key={i} onClick={() => {stopAudio(); setLoading(true); processTurn('continue', `User action: "${c}". Continue story.`);}} className={`p-4 text-center bg-gray-900 hover:bg-gray-800 border border-gray-800 hover:border-blue-500/50 rounded-lg text-gray-300 transition-all group h-full flex items-center justify-center ${prefs.uiSize}`}><span className="font-bold text-blue-500 mr-2">{i+1}.</span> {c}</button>
+                                                {currentTurnData.choices.slice(0,4).map((choice, i) => (
+                                                    <button key={i} onClick={() => handleTurn(choice)} className={`p-4 text-center bg-gray-900 hover:bg-gray-800 border border-gray-800 hover:border-blue-500/50 rounded-lg text-gray-300 transition-all group h-full flex items-center justify-center ${prefs.uiSize}`}>
+                                                        <span className="font-bold text-blue-500 mr-2">{i + 1}.</span> {choice}
+                                                    </button>
                                                 ))}
                                             </div>
                                         )}
                                         {config.mode === 'text' && (
-                                            <div className="flex gap-2">
-                                                <Input value={userInput} onChange={(e) => setUserInput(e.target.value)} placeholder="Enter action..." onKeyDown={(e) => e.key === 'Enter' && userInput && processTurn('continue', userInput)} disabled={loading} />
-                                                <Button onClick={() => processTurn('continue', userInput)} disabled={!userInput || loading}><Send size={14}/></Button>
+                                             <div className="flex gap-2">
+                                                <Input value={userInput} onChange={(e) => setUserInput(e.target.value)} placeholder="Enter action..." onKeyDown={(e) => e.key === 'Enter' && userInput && handleTurn(userInput)} disabled={loading} />
+                                                <Button onClick={() => handleTurn(userInput)} disabled={!userInput || loading} className="shrink-0"><Send size={14} /></Button>
                                             </div>
                                         )}
                                     </div>
@@ -459,23 +933,35 @@
                                 {!isLatestSlide && <div className="text-center text-xs text-gray-600 italic">Navigate to the last page to continue...</div>}
                                 {isFinished && <div className="text-center text-sm text-blue-400 font-bold uppercase tracking-widest">Story Complete</div>}
                                 {generatingAssets && <div className="text-center text-xs text-blue-400/50 italic animate-pulse">Generating new possibilities...</div>}
-                            </div>
+                             </div>
                         </div>
 
-                        {/* MODALS OVERLAYS */}
                         {showSettings && renderSettings()}
+                        
                         {showExportModal && (
                             <div className="absolute inset-0 bg-black/90 flex items-center justify-center z-50 p-6">
                                 <div className="w-full max-w-md bg-gray-900 border border-gray-800 rounded-xl p-6 shadow-2xl">
-                                    <div className="flex justify-between mb-6"><h3 className="text-lg font-bold text-white">Finalize</h3><button onClick={()=>setShowExportModal(false)}><X/></button></div>
-                                    <div className="space-y-4 mb-6">
-                                        <Input value={exportDetails.title} onChange={e=>setExportDetails({...exportDetails, title:e.target.value})} />
-                                        <Input value={exportDetails.author} onChange={e=>setExportDetails({...exportDetails, author:e.target.value})} />
+                                    <div className="flex justify-between items-center mb-6">
+                                        <h3 className="text-lg font-bold text-white flex items-center gap-2"><Book size={20}/> Finalize Chronicle</h3>
+                                        <button onClick={() => setShowExportModal(false)}><X size={20} className="text-gray-500 hover:text-white"/></button>
                                     </div>
-                                    <Button onClick={()=>{setShowExportModal(false); exportBook();}}>Download PDF</Button>
+                                    <div className="space-y-4 mb-6">
+                                        <div>
+                                            <label className="text-xs uppercase text-blue-400 font-bold block mb-2">Title of the Work</label>
+                                            <Input value={exportDetails.title} onChange={e => setExportDetails({...exportDetails, title: e.target.value})} className="bg-black/50" />
+                                        </div>
+                                        <div>
+                                            <label className="text-xs uppercase text-blue-400 font-bold block mb-2">Author Name</label>
+                                            <Input value={exportDetails.author} onChange={e => setExportDetails({...exportDetails, author: e.target.value})} className="bg-black/50" />
+                                        </div>
+                                    </div>
+                                    <Button onClick={() => { setShowExportModal(false); exportBook(); }} className="w-full py-3 text-base">
+                                        <Download size={18}/> Generate PDF Document
+                                    </Button>
                                 </div>
                             </div>
                         )}
+                        
                         {showExitConfirm && (
                             <div className="absolute inset-0 bg-black/90 flex items-center justify-center z-50 p-6">
                                 <div className="w-full max-w-sm bg-gray-900 border border-red-900/50 rounded-xl p-6 text-center">
@@ -486,17 +972,37 @@
                                 </div>
                             </div>
                         )}
-                        {/* SIDE PANEL */}
+
                         {(showSummary || showCodex) && (
                             <div className="absolute top-12 bottom-0 right-0 w-full md:w-80 bg-gray-950 border-l border-gray-800 shadow-2xl z-50 flex flex-col">
-                                <div className="flex justify-between p-3 border-b border-gray-800 bg-gray-900"><h3 className="text-xs font-bold text-gray-300">{showCodex?"Codex":"Summary"}</h3><button onClick={()=>{setShowSummary(false);setShowCodex(false)}}><X size={16}/></button></div>
-                                <div className="flex-1 overflow-y-auto p-4 custom-scrollbar text-xs text-gray-400 font-mono">{showCodex?JSON.stringify(codex, null, 2):summary}</div>
+                                <div className="flex items-center justify-between p-3 border-b border-gray-800 bg-gray-900">
+                                    <h3 className="text-xs font-bold uppercase tracking-widest text-gray-300 flex items-center gap-2">{showCodex ? <><BookOpen size={14} /> Codex</> : <><FileText size={14} /> Story Summary</>}</h3>
+                                    <button onClick={() => { setShowSummary(false); setShowCodex(false); }} className="text-gray-500 hover:text-white"><X size={16} /></button>
+                                </div>
+                                <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
+                                    {showCodex ? (
+                                        <div className="space-y-6">
+                                            {['people', 'places', 'items'].map((type, i) => {
+                                                const colors = [{ title: 'People', bg: 'bg-blue-900/30', text: 'text-blue-400', key: 'characters' }, { title: 'Locations', bg: 'bg-emerald-900/30', text: 'text-emerald-400', key: 'places' }, { title: 'Artifacts', bg: 'bg-amber-900/30', text: 'text-amber-400', key: 'items' }][i];
+                                                const entries = codex[colors.key] || {};
+                                                return (
+                                                    <div key={type}>
+                                                        <h4 className={`text-[10px] font-bold uppercase mb-2 flex items-center gap-2 ${colors.text}`}>{colors.title} <span className={`${colors.bg} px-1.5 py-0.5 rounded text-[9px]`}>{Object.keys(entries).length}</span></h4>
+                                                        <div className="space-y-1.5">{Object.entries(entries).length === 0 && <p className="text-[10px] text-gray-600 italic">No records.</p>}{Object.entries(entries).map(([name, desc]) => <div key={name} className="bg-gray-900/50 p-2 rounded border border-gray-800/50 hover:border-gray-700 transition-colors"><div className="text-xs font-bold text-gray-300">{name}</div><div className="text-[10px] text-gray-500 mt-0.5 leading-snug">{desc}</div></div>)}</div>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    ) : (
+                                        <div className="space-y-4"><div className="text-[10px] text-gray-400 leading-relaxed font-mono bg-gray-900 p-3 rounded border border-gray-800">{summary}</div></div>
+                                    )}
+                                </div>
                             </div>
                         )}
                     </div>
                 </div>
             );
-        };
+        }
 
         const root = ReactDOM.createRoot(document.getElementById('root'));
         root.render(<App />);
