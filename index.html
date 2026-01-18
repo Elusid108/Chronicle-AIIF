@@ -1,0 +1,793 @@
+{\rtf1}import React, { useState, useEffect, useRef } from 'react';
+import { 
+    Settings, 
+    Book, 
+    Image as ImageIcon, 
+    Play, 
+    Send, 
+    Terminal, 
+    X, 
+    Cpu, 
+    Eye, 
+    EyeOff,
+    ChevronLeft,
+    ChevronRight,
+    BookOpen,
+    Volume2,
+    VolumeX,
+    FileText,
+    Type,
+    CheckCircle,
+    Flag,
+    Printer
+} from 'lucide-react';
+
+// --- UTILITIES ---
+
+const pcmToWav = (value, sampleRate = 24000) => {
+    const binaryString = atob(value);
+    const len = binaryString.length;
+    const buffer = new ArrayBuffer(len);
+    const view = new Uint8Array(buffer);
+    for (let i = 0; i < len; i++) {
+        view[i] = binaryString.charCodeAt(i);
+    }
+    const pcmData = new Int16Array(buffer);
+    const wavBuffer = new ArrayBuffer(44 + pcmData.length * 2);
+    const wavView = new DataView(wavBuffer);
+    const writeString = (offset, string) => {
+        for (let i = 0; i < string.length; i++) {
+            wavView.setUint8(offset + i, string.charCodeAt(i));
+        }
+    };
+    writeString(0, 'RIFF');
+    wavView.setUint32(4, 36 + pcmData.length * 2, true);
+    writeString(8, 'WAVE');
+    writeString(12, 'fmt ');
+    wavView.setUint32(16, 16, true);
+    wavView.setUint16(20, 1, true); 
+    wavView.setUint16(22, 1, true); 
+    wavView.setUint32(24, sampleRate, true);
+    wavView.setUint32(28, sampleRate * 2, true);
+    wavView.setUint16(32, 2, true);
+    wavView.setUint16(34, 16, true);
+    writeString(36, 'data');
+    wavView.setUint32(40, pcmData.length * 2, true);
+    const pcmView = new Int16Array(wavBuffer, 44);
+    pcmView.set(pcmData);
+    return new Blob([wavBuffer], { type: 'audio/wav' });
+};
+
+// --- COMPONENTS ---
+
+const Button = ({ children, onClick, variant = 'primary', className = '', disabled = false, title = '' }) => {
+    const baseStyle = "px-3 py-2 rounded-lg font-medium transition-all duration-200 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed text-sm";
+    const variants = {
+        primary: "bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-900/20",
+        secondary: "bg-black/50 hover:bg-black/80 text-white border border-white/10 backdrop-blur-sm", 
+        outline: "border border-gray-600 hover:border-gray-400 text-gray-400 hover:text-white",
+        ghost: "text-gray-400 hover:text-white hover:bg-gray-800/50"
+    };
+    return (
+        <button 
+            onClick={onClick} 
+            disabled={disabled}
+            className={`${baseStyle} ${variants[variant]} ${className}`}
+            title={title}
+        >
+            {children}
+        </button>
+    );
+};
+
+const Input = ({ value, onChange, placeholder, type = "text", className = "", onKeyDown, disabled }) => (
+    <input
+        type={type}
+        value={value}
+        onChange={onChange}
+        placeholder={placeholder}
+        onKeyDown={onKeyDown}
+        disabled={disabled}
+        className={`w-full bg-gray-900/50 border border-gray-700 rounded-lg px-4 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 transition-all disabled:opacity-50 ${className}`}
+    />
+);
+
+const Select = ({ value, onChange, options, label, allowCustom = false, customValue, onCustomChange }) => (
+    <div className="flex flex-col gap-2">
+        <label className="text-xs uppercase tracking-wider text-gray-500 font-bold">{label}</label>
+        <div className="grid grid-cols-2 gap-2">
+            {options.map((opt) => (
+                <button
+                    key={opt.value}
+                    onClick={() => onChange(opt.value)}
+                    className={`p-2 rounded-lg text-xs text-left transition-all border ${
+                        value === opt.value 
+                        ? 'bg-blue-900/20 border-blue-500 text-blue-200 shadow-[0_0_15px_rgba(59,130,246,0.15)]' 
+                        : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700'
+                    }`}
+                >
+                    <div className="font-semibold">{opt.label}</div>
+                </button>
+            ))}
+            {allowCustom && (
+                <button
+                    onClick={() => onChange('custom')}
+                    className={`p-2 rounded-lg text-xs text-left transition-all border ${
+                        value === 'custom'
+                        ? 'bg-blue-900/20 border-blue-500 text-blue-200 shadow-[0_0_15px_rgba(59,130,246,0.15)]' 
+                        : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700'
+                    }`}
+                >
+                    <div className="font-semibold">Custom...</div>
+                </button>
+            )}
+        </div>
+        {value === 'custom' && allowCustom && (
+            <Input 
+                value={customValue} 
+                onChange={onCustomChange} 
+                placeholder={`Describe custom ${label.toLowerCase()}...`}
+                className="mt-1 bg-blue-900/10 border-blue-500/50"
+            />
+        )}
+    </div>
+);
+
+// --- MAIN APPLICATION ---
+
+export default function App() {
+    // --- STATE ---
+    const [view, setView] = useState('setup');
+    const [apiKey, setApiKey] = useState('');
+    const [showKey, setShowKey] = useState(false);
+    
+    // Config & Prefs
+    const [config, setConfig] = useState({
+        setting: 'cyberpunk',
+        settingCustom: '',
+        style: 'pixel_art',
+        styleCustom: '',
+        mode: 'choice'
+    });
+    const [prefs, setPrefs] = useState({
+        narrativeSize: 'text-lg', 
+        uiSize: 'text-xs',        
+        voice: 'Kore',
+        autoPlay: true,
+        endingLength: 5, // turns for countdown
+        authorName: 'Anonymous',
+        storyTitle: 'The Unnamed Chronicle'
+    });
+    const [showSettings, setShowSettings] = useState(false);
+
+    // Game Logic State
+    const [history, setHistory] = useState([]); 
+    const [codex, setCodex] = useState({ characters: {}, places: {}, items: {} });
+    const [currentSlideIndex, setCurrentSlideIndex] = useState(0);
+    const [summary, setSummary] = useState("The story has just begun.");
+    const [userInput, setUserInput] = useState('');
+    
+    // Ending State
+    const [isEnding, setIsEnding] = useState(false);
+    const [turnsRemaining, setTurnsRemaining] = useState(null);
+    const [isFinished, setIsFinished] = useState(false);
+
+    // UI/Loading State
+    const [loading, setLoading] = useState(false);
+    const [generatingAssets, setGeneratingAssets] = useState(false);
+    
+    // Panels
+    const [showSummary, setShowSummary] = useState(false);
+    const [showCodex, setShowCodex] = useState(false);
+
+    // Audio
+    const [isPlaying, setIsPlaying] = useState(false);
+    const [previewPlaying, setPreviewPlaying] = useState(false);
+    const audioRef = useRef(null);
+
+    // Touch
+    const touchStart = useRef(null);
+    const touchEnd = useRef(null);
+    const minSwipeDistance = 50;
+
+    // Refs
+    const textScrollRef = useRef(null);
+
+    // --- EFFECTS ---
+
+    // Scroll Text with Audio
+    useEffect(() => {
+        let animationFrame;
+        const animateScroll = () => {
+            if (isPlaying && audioRef.current && textScrollRef.current) {
+                const { currentTime, duration } = audioRef.current;
+                if (duration > 0) {
+                    const progress = currentTime / duration;
+                    const scrollHeight = textScrollRef.current.scrollHeight - textScrollRef.current.clientHeight;
+                    // Only scroll if we can
+                    if (scrollHeight > 0) {
+                        textScrollRef.current.scrollTop = scrollHeight * progress;
+                    }
+                }
+                animationFrame = requestAnimationFrame(animateScroll);
+            }
+        };
+
+        if (isPlaying) {
+            animationFrame = requestAnimationFrame(animateScroll);
+        } else {
+            cancelAnimationFrame(animationFrame);
+        }
+
+        return () => cancelAnimationFrame(animationFrame);
+    }, [isPlaying]);
+
+    // Auto-scroll slide
+    useEffect(() => {
+        if (history.length > 0) {
+            setCurrentSlideIndex(history.length - 1);
+        }
+    }, [history.length]);
+
+    // Auto-Play
+    useEffect(() => {
+        const currentTurn = history[currentSlideIndex];
+        // If we have audio and it's the latest turn and autoPlay is on...
+        if (prefs.autoPlay && currentSlideIndex === history.length - 1 && currentTurn?.type === 'ai' && currentTurn.audio && !isPlaying) {
+             handleSpeak(currentTurn);
+        }
+    }, [currentSlideIndex, history]); // Depend on history to catch when audio blob is added
+
+    // --- API LOGIC ---
+
+    const voices = [
+        'Kore', 'Fenrir', 'Puck', 'Leda', 'Charon', 'Zephyr', 'Orus', 'Aoede', 
+        'Callirrhoe', 'Autonoe', 'Enceladus', 'Iapetus', 'Umbriel', 'Algieba', 
+        'Despina', 'Erinome', 'Algenib', 'Rasalgethi', 'Laomedeia', 'Achernar', 
+        'Alnilam', 'Schedar', 'Gacrux', 'Pulcherrima', 'Achird', 'Zubenelgenubi', 
+        'Vindemiatrix', 'Sadachbia', 'Sadaltager', 'Sulafat'
+    ];
+
+    const callGemini = async (prompt, systemInstruction = "") => {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+        const payload = {
+            contents: [{ parts: [{ text: prompt }] }],
+            systemInstruction: { parts: [{ text: systemInstruction }] },
+            generationConfig: { temperature: 0.8, maxOutputTokens: 2000, responseMimeType: "application/json" }
+        };
+        const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        if (!response.ok) throw new Error(`API Error: ${response.status}`);
+        const data = await response.json();
+        return JSON.parse(data.candidates[0].content.parts[0].text);
+    };
+
+    const generateImage = async (imagePrompt) => {
+        const stylePrompt = config.style === 'custom' ? config.styleCustom : config.style;
+        const fullPrompt = `Style: ${stylePrompt}. ${imagePrompt}`;
+
+        // Attempt 1: Imagen (High Quality)
+        try {
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-generate-001:predict?key=${apiKey}`;
+            const payload = { 
+                instances: [{ prompt: fullPrompt }], 
+                parameters: { sampleCount: 1, aspectRatio: "16:9" } 
+            };
+            
+            const response = await fetch(url, { 
+                method: 'POST', 
+                headers: { 'Content-Type': 'application/json' }, 
+                body: JSON.stringify(payload) 
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                if (data.predictions?.[0]?.bytesBase64Encoded) {
+                    return `data:image/png;base64,${data.predictions[0].bytesBase64Encoded}`;
+                }
+            }
+            throw new Error(`Imagen API Error: ${response.status}`);
+        } catch (e) {
+            console.warn("Primary image generation failed, trying fallback...", e);
+            
+            // Attempt 2: Nano Banana / Flash Image (Fallback)
+            try {
+                const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image-preview:generateContent?key=${apiKey}`;
+                const payload = {
+                    contents: [{ parts: [{ text: fullPrompt }] }],
+                    generationConfig: { responseModalities: ["IMAGE"] }
+                };
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    const part = data.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
+                    if (part) {
+                        return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+                    }
+                }
+            } catch (e2) {
+                console.error("Fallback image generation failed", e2);
+            }
+            return null;
+        }
+    };
+
+    const generateSpeech = async (text, voiceOverride = null) => {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${apiKey}`;
+        const payload = {
+            contents: [{ parts: [{ text }] }],
+            generationConfig: { responseModalities: ["AUDIO"], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voiceOverride || prefs.voice } } } }
+        };
+        try {
+            const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+            if (!response.ok) return null;
+            const data = await response.json();
+            return data.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data ? pcmToWav(data.candidates[0].content.parts[0].inlineData.data) : null;
+        } catch { return null; }
+    };
+
+    // --- GAME ACTIONS ---
+
+    const updateCodexState = (updates) => {
+        if (!updates || !Array.isArray(updates)) return;
+        
+        setCodex(prev => {
+            const next = { ...prev };
+            updates.forEach(item => {
+                let catKey = item.category?.toLowerCase();
+                if (catKey === 'character') catKey = 'characters';
+                else if (catKey === 'place') catKey = 'places';
+                else if (catKey === 'item') catKey = 'items';
+                
+                // Fallback for direct plural usage
+                if (!next[catKey] && next[item.category?.toLowerCase() + 's']) {
+                     catKey = item.category?.toLowerCase() + 's';
+                }
+
+                if (next[catKey]) {
+                    const existing = next[catKey][item.key] || "";
+                    if (!existing.includes(item.entry)) {
+                        next[catKey][item.key] = existing ? `${existing}; ${item.entry}` : item.entry;
+                    }
+                }
+            });
+            return next;
+        });
+    };
+
+    const initiateEnding = () => {
+        setIsEnding(true);
+        setTurnsRemaining(prefs.endingLength);
+        alert(`The story will now conclude in ${prefs.endingLength} turns. Make them count!`);
+    };
+
+    const exportBook = () => {
+        const bookWindow = window.open('', '_blank');
+        const stylePrompt = config.style === 'custom' ? config.styleCustom : config.style;
+        
+        const html = `
+            <html>
+            <head>
+                <title>${prefs.storyTitle} - Book Export</title>
+                <style>
+                    @media print {
+                        @page { margin: 2cm; size: A4; }
+                        body { font-family: 'Georgia', serif; line-height: 1.6; color: #000; background: #fff; }
+                        .page-break { page-break-before: always; }
+                        a { text-decoration: none; color: #000; }
+                    }
+                    body { font-family: 'Georgia', serif; max-width: 800px; mx-auto; padding: 40px; }
+                    .title-page { text-align: center; margin-top: 40vh; margin-bottom: 40vh; }
+                    .title-page h1 { font-size: 3em; margin-bottom: 0.5em; }
+                    .title-page h2 { font-size: 1.5em; font-weight: normal; font-style: italic; }
+                    .toc { margin-top: 4em; }
+                    .chapter-link { display: block; padding: 0.5em 0; border-bottom: 1px dotted #ccc; }
+                    .chapter { margin-top: 4em; }
+                    .chapter-img { width: 100%; max-height: 500px; object-fit: contain; margin: 2em 0; border: 1px solid #eee; }
+                    .chapter-text { font-size: 1.1em; text-align: justify; }
+                </style>
+            </head>
+            <body>
+                <div class="title-page">
+                    <h1>${prefs.storyTitle}</h1>
+                    <h2>by ${prefs.authorName}</h2>
+                    <p style="margin-top: 2em; font-size: 0.8em; color: #666;">Generated by Chronicle AI</p>
+                </div>
+
+                <div class="page-break"></div>
+
+                <div class="toc">
+                    <h1>Table of Contents</h1>
+                    ${history.map((turn, i) => `<a href="#ch${i+1}" class="chapter-link">Page ${i+1}</a>`).join('')}
+                </div>
+
+                <div class="page-break"></div>
+
+                ${history.map((turn, i) => `
+                    <div id="ch${i+1}" class="chapter ${i > 0 ? 'page-break' : ''}">
+                        <h3>Page ${i+1}</h3>
+                        ${turn.image ? `<img src="${turn.image}" class="chapter-img" alt="Illustration" />` : ''}
+                        <div class="chapter-text">${turn.narrative.replace(/\n/g, '<br/>')}</div>
+                    </div>
+                `).join('')}
+
+                <script>
+                    window.onload = () => { setTimeout(() => window.print(), 1000); };
+                </script>
+            </body>
+            </html>
+        `;
+        bookWindow.document.write(html);
+        bookWindow.document.close();
+    };
+
+    const processTurn = async (promptType, inputVal) => {
+        stopAudio();
+        setLoading(true);
+        
+        let systemPrompt = getSystemPrompt();
+        if (isEnding) {
+            if (turnsRemaining > 1) {
+                systemPrompt += `\nCRITICAL: The story is ENDING. You have ${turnsRemaining} turns remaining. Begin wrapping up plot threads.`;
+            } else if (turnsRemaining === 1) {
+                systemPrompt += `\nCRITICAL: This is the PENULTIMATE turn. Set the stage for the finale.`;
+            } else {
+                systemPrompt += `\nCRITICAL: This is the FINAL turn. Provide a satisfying conclusion to the story.`;
+            }
+        }
+
+        try {
+            // 1. Generate Text Immediately
+            const turnData = await callGemini(inputVal, systemPrompt);
+            updateCodexState(turnData.codex_updates);
+            setSummary(prev => isEnding ? turnData.summary_update : prev + " " + turnData.summary_update);
+            
+            // Create Placeholder Turn
+            const newTurn = { 
+                ...turnData, 
+                image: null, 
+                audio: null, 
+                type: 'ai', 
+                userActionPreceding: promptType === 'initial' ? null : inputVal 
+            };
+
+            // Update History (Display Text Immediately)
+            setHistory(prev => [...prev, newTurn]);
+            
+            // LOGIC FIX: Switch view & set correct index
+            if (promptType === 'initial') {
+                setCurrentSlideIndex(0);
+                setView('game'); // <--- Ensure we switch to game screen
+            } else {
+                setCurrentSlideIndex(prev => prev + 1);
+            }
+
+            setLoading(false); // Input is unlocked, but visual assets are loading
+            setGeneratingAssets(true);
+
+            // 2. Background Generation
+            const imagePromise = generateImage(turnData.image_prompt);
+            const audioPromise = prefs.autoPlay ? generateSpeech(turnData.narrative) : Promise.resolve(null);
+
+            const [imageUrl, audioBlob] = await Promise.all([imagePromise, audioPromise]);
+
+            // Update the specific history item with assets
+            setHistory(prev => {
+                const updated = [...prev];
+                const index = updated.length - 1; // The one we just added
+                updated[index] = { ...updated[index], image: imageUrl, audio: audioBlob };
+                return updated;
+            });
+
+            // Handle Ending Logic
+            if (isEnding) {
+                setTurnsRemaining(t => t - 1);
+                if (turnsRemaining <= 1) setIsFinished(true);
+            }
+
+        } catch (error) {
+            console.error(error);
+            alert("Error processing turn.");
+            setLoading(false);
+        } finally {
+            setGeneratingAssets(false);
+            setUserInput('');
+        }
+    };
+
+    const startGame = () => processTurn('initial', `Start the story.`);
+    const handleTurn = (input) => processTurn('continue', `User action: "${input}". Continue story.`);
+
+    // --- RENDER HELPERS ---
+
+    const getSystemPrompt = () => {
+        const settingVal = config.setting === 'custom' ? config.settingCustom : config.setting;
+        const styleVal = config.style === 'custom' ? config.styleCustom : config.style;
+        return `
+            You are an advanced AI Game Master.
+            WORLD: ${settingVal}, Style: ${styleVal}
+            CONTEXT: ${summary}. Codex: ${JSON.stringify(codex)}
+            INSTRUCTIONS: Advance story. Maintain Codex.
+            OUTPUT JSON: {
+                "narrative": "Story text.",
+                "choices": ["Option 1", "Option 2"],
+                "summary_update": "Update summary.",
+                "image_prompt": "Visual desc.",
+                "codex_updates": [ { "category": "character|place|item", "key": "Name", "entry": "Trait" } ]
+            }
+        `;
+    };
+
+    const handleSpeak = async (turn) => {
+        if (!turn || !apiKey) return;
+        if (isPlaying) { stopAudio(); return; }
+
+        setIsPlaying(true);
+        let wavBlob = turn.audio;
+        if (!wavBlob) { wavBlob = await generateSpeech(turn.narrative); }
+        
+        if (wavBlob) {
+            const audioUrl = URL.createObjectURL(wavBlob);
+            const audio = new Audio(audioUrl);
+            audioRef.current = audio;
+            audio.play();
+            audio.onended = () => setIsPlaying(false);
+        } else { setIsPlaying(false); }
+    };
+
+    const previewVoice = async (voiceName) => {
+        if (audioRef.current) audioRef.current.pause();
+        setPreviewPlaying(true);
+        const wavBlob = await generateSpeech(`Hello, this is ${voiceName}.`, voiceName);
+        if (wavBlob) {
+            const audioUrl = URL.createObjectURL(wavBlob);
+            const audio = new Audio(audioUrl);
+            audio.play();
+            audio.onended = () => setPreviewPlaying(false);
+        } else { setPreviewPlaying(false); }
+    };
+
+    const stopAudio = () => {
+        if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
+        setIsPlaying(false);
+    };
+
+    // Nav Helpers
+    const nextSlide = () => { if (currentSlideIndex < history.length - 1) setCurrentSlideIndex(c => c + 1); };
+    const prevSlide = () => { if (currentSlideIndex > 0) setCurrentSlideIndex(c => c - 1); };
+    const onTouchStart = (e) => { touchEnd.current = null; touchStart.current = e.targetTouches[0].clientX; }
+    const onTouchMove = (e) => { touchEnd.current = e.targetTouches[0].clientX; }
+    const onTouchEnd = () => {
+        if (!touchStart.current || !touchEnd.current) return;
+        if (touchStart.current - touchEnd.current > minSwipeDistance) nextSlide();
+        else if (touchStart.current - touchEnd.current < -minSwipeDistance) prevSlide();
+    }
+
+    const currentTurnData = history[currentSlideIndex];
+    const isLatestSlide = currentSlideIndex === history.length - 1;
+
+    // --- VIEWS ---
+
+    if (view === 'setup') {
+        return (
+             <div className="min-h-screen w-full bg-black flex flex-col items-center justify-center p-6 text-gray-200 font-sans">
+                <style>{`@import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700&family=Inter:wght@300;400;600&family=Merriweather:ital,wght@0,300;0,400;0,700;1,400&display=swap');`}</style>
+                <div className="w-full max-w-2xl bg-gray-900 border border-gray-800 rounded-2xl p-8 shadow-2xl">
+                    <div className="flex items-center gap-3 mb-8">
+                        <div className="p-3 bg-blue-600 rounded-lg"><Cpu className="text-white" /></div>
+                        <div><h1 className="text-3xl font-display font-bold text-white">CHRONICLE</h1><p className="text-gray-500 text-sm uppercase tracking-widest">Iterative Fiction Engine</p></div>
+                    </div>
+                     <div className="bg-gray-950 p-4 rounded-xl border border-gray-800 mb-6">
+                            <label className="block text-xs uppercase text-blue-400 font-bold mb-2">Google Gemini API Key</label>
+                            <div className="relative"><Input type={showKey ? "text" : "password"} value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="Enter key..." className="bg-gray-900/50" /><button onClick={() => setShowKey(!showKey)} className="absolute right-3 top-2.5 text-gray-500">{showKey ? <EyeOff size={16}/> : <Eye size={16} />}</button></div>
+                    </div>
+                     <div className="grid md:grid-cols-2 gap-6 mb-6">
+                            <Select label="World Setting" value={config.setting} onChange={(v) => setConfig({...config, setting: v})} allowCustom={true} customValue={config.settingCustom} onCustomChange={(e) => setConfig({...config, settingCustom: e.target.value})} options={[{ value: 'fantasy', label: 'High Fantasy' }, { value: 'cyberpunk', label: 'Cyberpunk' }, { value: 'noir', label: 'Noir Detective' }, { value: 'scifi', label: 'Space Opera' }, { value: 'lovecraft', label: 'Eldritch Horror' }, { value: 'postapoc', label: 'Wasteland' }]} />
+                            <Select label="Visual Style" value={config.style} onChange={(v) => setConfig({...config, style: v})} allowCustom={true} customValue={config.styleCustom} onCustomChange={(e) => setConfig({...config, styleCustom: e.target.value})} options={[{ value: 'cinematic', label: 'Cinematic' }, { value: 'pixel_art', label: 'Pixel Art' }, { value: 'watercolor', label: 'Watercolor' }, { value: 'comic', label: 'Graphic Novel' }, { value: 'oil_painting', label: 'Oil Painting' }, { value: 'blueprint', label: 'Blueprint' }]} />
+                    </div>
+                    <Button onClick={startGame} className="w-full py-4 text-lg mt-6" disabled={loading || !apiKey}>{loading ? "Initializing..." : "Begin Simulation"}</Button>
+                </div>
+            </div>
+        );
+    }
+
+    return (
+        <div className="h-screen w-full flex flex-col md:flex-row bg-black text-gray-200 font-sans" onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}>
+            <style>{`
+                @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700&family=Inter:wght@300;400;600&family=Merriweather:ital,wght@0,300;0,400;0,700;1,400&display=swap');
+                body, html, #root { margin: 0; padding: 0; background-color: #000000; width: 100%; height: 100%; overflow: hidden; }
+                .font-serif { font-family: 'Merriweather', serif; }
+                .font-display { font-family: 'Cinzel', serif; }
+                ::-webkit-scrollbar { width: 6px; }
+                ::-webkit-scrollbar-track { background: #000; }
+                ::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+                .fade-in { animation: fadeIn 0.8s ease-out; }
+                @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+                .loading-line { animation: loadingWidth 2s infinite linear; }
+                @keyframes loadingWidth { 0% { width: 0%; left: 0; } 50% { width: 100%; left: 0; } 100% { width: 0%; left: 100%; } }
+            `}</style>
+            
+            {/* MAIN */}
+            <div className="flex-1 flex flex-col h-full relative z-10 bg-black min-w-0">
+                <div className="h-12 border-b border-gray-800 bg-gray-950 flex items-center justify-between px-4 shrink-0 z-20">
+                    <div className="flex items-center gap-4">
+                         <div className="text-gray-500 text-xs font-bold tracking-widest uppercase truncate max-w-[100px] md:max-w-none">{config.setting === 'custom' ? config.settingCustom : config.setting}</div>
+                    </div>
+                    {/* End Story Button or Countdown */}
+                    {!isEnding && !isFinished && history.length > 0 && (
+                        <button onClick={initiateEnding} className="text-xs bg-red-900/30 text-red-400 border border-red-900/50 px-3 py-1 rounded hover:bg-red-900/50 flex items-center gap-2">
+                            <Flag size={12}/> Conclude Story
+                        </button>
+                    )}
+                    {isEnding && !isFinished && (
+                        <div className="text-xs text-red-500 font-bold tracking-widest animate-pulse">
+                            FINALE IN {turnsRemaining}
+                        </div>
+                    )}
+                    {isFinished && (
+                        <button onClick={exportBook} className="text-xs bg-emerald-900/30 text-emerald-400 border border-emerald-900/50 px-3 py-1 rounded hover:bg-emerald-900/50 flex items-center gap-2">
+                            <Printer size={12}/> Export Book
+                        </button>
+                    )}
+                    <div className="flex gap-2">
+                        <button onClick={() => setShowSettings(!showSettings)} className={`p-1.5 rounded hover:bg-gray-800 ${showSettings ? 'text-blue-400' : 'text-gray-500'}`} title="Settings"><Settings size={16} /></button>
+                         <button onClick={() => { setShowCodex(!showCodex); setShowSummary(false); setShowSettings(false); }} className={`p-1.5 rounded hover:bg-gray-800 ${showCodex ? 'text-blue-400' : 'text-gray-500'}`} title="Codex"><BookOpen size={16} /></button>
+                        <button onClick={() => { setShowSummary(!showSummary); setShowCodex(false); setShowSettings(false); }} className={`p-1.5 rounded hover:bg-gray-800 ${showSummary ? 'text-blue-400' : 'text-gray-500'}`} title="Summary"><FileText size={16} /></button>
+                    </div>
+                </div>
+
+                {/* IMAGE */}
+                <div className="h-[40vh] md:h-[45vh] bg-black border-b border-gray-900 relative shrink-0 group">
+                    {/* Progress Bar for Background Assets */}
+                    {generatingAssets && (
+                        <div className="absolute top-0 left-0 right-0 h-1 bg-blue-900/30 z-30">
+                            <div className="h-full bg-blue-500 loading-line absolute"></div>
+                        </div>
+                    )}
+                    
+                    {currentTurnData ? (
+                        currentTurnData.image ? (
+                            <div className="w-full h-full relative">
+                                <img src={currentTurnData.image} alt="Scene" className="w-full h-full object-contain mx-auto bg-black fade-in" />
+                                <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(circle_at_center,transparent_50%,rgba(0,0,0,0.4)_100%)]"></div>
+                            </div>
+                        ) : (
+                            <div className="w-full h-full flex items-center justify-center text-gray-700 flex-col gap-2">
+                                <ImageIcon size={32} />
+                                <span className="text-xs tracking-widest uppercase">{generatingAssets ? "Rendering Neural Image..." : "Visual Constructing..."}</span>
+                            </div>
+                        )
+                    ) : (
+                        <div className="w-full h-full flex items-center justify-center text-gray-800"><span className="animate-pulse">Waiting...</span></div>
+                    )}
+
+                    <div className="absolute bottom-4 left-4 z-20"><Button variant="secondary" onClick={prevSlide} disabled={currentSlideIndex === 0} className="w-10 h-10 rounded-full !p-0 shadow-xl"><ChevronLeft size={20} /></Button></div>
+                    <div className="absolute bottom-4 right-4 z-20"><Button variant="secondary" onClick={nextSlide} disabled={currentSlideIndex === history.length - 1} className="w-10 h-10 rounded-full !p-0 shadow-xl"><ChevronRight size={20} /></Button></div>
+                </div>
+
+                {/* TEXT */}
+                <div ref={textScrollRef} className="flex-1 overflow-y-auto bg-black p-6 md:p-8 custom-scrollbar min-h-0">
+                    <div className="max-w-3xl mx-auto flex flex-col items-center text-center fade-in">
+                        {currentTurnData && (
+                            <div className="relative w-full">
+                                <div className="absolute right-0 top-0 -mr-8 mt-1 hidden md:block">
+                                    <button onClick={() => handleSpeak(currentTurnData)} className={`p-2 rounded-full hover:bg-gray-800 transition-colors ${isPlaying ? 'text-blue-400 animate-pulse' : 'text-gray-600'} ${generatingAssets && !currentTurnData.audio ? 'opacity-50 cursor-wait' : ''}`} title="Read Aloud" disabled={generatingAssets && !currentTurnData.audio}>
+                                        {isPlaying ? <VolumeX size={18} /> : <Volume2 size={18} />}
+                                    </button>
+                                </div>
+                                <div className="prose prose-invert prose-p:text-gray-300 prose-p:font-serif prose-p:leading-loose">
+                                    {currentTurnData.narrative.split('\n').map((line, i) => <p key={i} className={`mb-4 leading-relaxed text-gray-300 font-serif ${prefs.narrativeSize}`}>{line}</p>)}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+
+                {/* FOOTER */}
+                <div className="shrink-0 bg-black border-t border-gray-900 p-4 md:p-6 z-20">
+                     <div className="max-w-3xl mx-auto w-full">
+                        {isLatestSlide && !loading && !isFinished && (
+                            <div className="fade-in">
+                                {config.mode === 'choice' && currentTurnData?.choices?.length > 0 && (
+                                    <div className="grid grid-cols-2 gap-2">
+                                        {currentTurnData.choices.map((choice, i) => (
+                                            <button key={i} onClick={() => handleTurn(choice)} className={`p-3 text-center bg-gray-900 hover:bg-gray-800 border border-gray-800 hover:border-blue-500/50 rounded-lg text-gray-300 transition-all group h-full flex items-center justify-center ${prefs.uiSize}`}>
+                                                <span className="font-bold text-blue-500 mr-1.5">{i + 1}.</span> {choice}
+                                            </button>
+                                        ))}
+                                    </div>
+                                )}
+                                {config.mode === 'text' && (
+                                     <div className="flex gap-2">
+                                        <Input value={userInput} onChange={(e) => setUserInput(e.target.value)} placeholder="Enter action..." onKeyDown={(e) => e.key === 'Enter' && userInput && handleTurn(userInput)} disabled={loading} className="py-2 text-xs bg-gray-900 border-gray-800" />
+                                        <Button onClick={() => handleTurn(userInput)} disabled={!userInput || loading} className="shrink-0"><Send size={14} /></Button>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                        {!isLatestSlide && <div className="text-center text-xs text-gray-600 italic">Navigate to the last page to continue...</div>}
+                        {isFinished && <div className="text-center text-sm text-blue-400 font-bold uppercase tracking-widest">Story Complete</div>}
+                     </div>
+                </div>
+
+                {/* SETTINGS */}
+                {showSettings && (
+                    <div className="absolute top-14 right-4 w-72 bg-gray-900 border border-gray-800 rounded-xl shadow-2xl z-50 p-4 overflow-y-auto max-h-[80vh] custom-scrollbar">
+                        <h3 className="text-xs font-bold uppercase text-gray-500 mb-4 flex items-center gap-2"><Settings size={12}/> Preferences</h3>
+                        <div className="space-y-4">
+                            <div>
+                                <label className="text-[10px] text-blue-400 font-bold block mb-1">INTERACTION MODE</label>
+                                <div className="flex gap-1">{['choice', 'text'].map(mode => <button key={mode} onClick={() => setConfig({...config, mode})} className={`flex-1 p-1 text-[10px] border rounded uppercase ${config.mode === mode ? 'bg-blue-900 border-blue-500 text-white' : 'border-gray-700 text-gray-500'}`}>{mode}</button>)}</div>
+                            </div>
+                            <div>
+                                <label className="text-[10px] text-blue-400 font-bold block mb-1">STORY TEXT SIZE</label>
+                                <div className="flex gap-1">{['text-base', 'text-lg', 'text-xl'].map(size => <button key={size} onClick={() => setPrefs({...prefs, narrativeSize: size})} className={`flex-1 p-1 text-[10px] border rounded ${prefs.narrativeSize === size ? 'bg-blue-900 border-blue-500 text-white' : 'border-gray-700 text-gray-500'}`}>{size.split('-')[1].toUpperCase()}</button>)}</div>
+                            </div>
+                            <div>
+                                <label className="text-[10px] text-blue-400 font-bold block mb-1">BUTTON TEXT SIZE</label>
+                                <div className="flex gap-1">{['text-xs', 'text-sm'].map(size => <button key={size} onClick={() => setPrefs({...prefs, uiSize: size})} className={`flex-1 p-1 text-[10px] border rounded ${prefs.uiSize === size ? 'bg-blue-900 border-blue-500 text-white' : 'border-gray-700 text-gray-500'}`}>{size.split('-')[1].toUpperCase()}</button>)}</div>
+                            </div>
+                            <div>
+                                <label className="text-[10px] text-blue-400 font-bold block mb-1">VOICE MODEL</label>
+                                <div className="flex gap-2">
+                                    <select value={prefs.voice} onChange={(e) => setPrefs({...prefs, voice: e.target.value})} className="flex-1 bg-black border border-gray-800 rounded p-1 text-xs text-gray-300">
+                                        {voices.map(v => <option key={v} value={v}>{v}</option>)}
+                                    </select>
+                                    <button onClick={() => previewVoice(prefs.voice)} disabled={previewPlaying} className="p-1 bg-gray-800 rounded text-gray-400 hover:text-white disabled:opacity-50">{previewPlaying ? <Volume2 size={14} className="animate-pulse text-blue-400"/> : <Play size={14} />}</button>
+                                </div>
+                            </div>
+                            <div className="flex items-center justify-between">
+                                <label className="text-[10px] text-blue-400 font-bold">AUTO-PLAY AUDIO</label>
+                                <button onClick={() => setPrefs({...prefs, autoPlay: !prefs.autoPlay})} className={`w-8 h-4 rounded-full relative transition-colors ${prefs.autoPlay ? 'bg-blue-600' : 'bg-gray-700'}`}><div className={`absolute top-0.5 w-3 h-3 bg-white rounded-full transition-transform ${prefs.autoPlay ? 'left-4.5' : 'left-0.5'}`} style={{left: prefs.autoPlay ? '18px' : '2px'}}></div></button>
+                            </div>
+                            <div>
+                                <label className="text-[10px] text-blue-400 font-bold block mb-1">ENDING LENGTH (TURNS)</label>
+                                <Input type="number" value={prefs.endingLength} onChange={(e) => setPrefs({...prefs, endingLength: parseInt(e.target.value) || 5})} className="bg-black border-gray-800 py-1 text-xs" />
+                            </div>
+                            <div>
+                                <label className="text-[10px] text-blue-400 font-bold block mb-1">AUTHOR NAME</label>
+                                <Input value={prefs.authorName} onChange={(e) => setPrefs({...prefs, authorName: e.target.value})} className="bg-black border-gray-800 py-1 text-xs" />
+                            </div>
+                            <div>
+                                <label className="text-[10px] text-blue-400 font-bold block mb-1">STORY TITLE</label>
+                                <Input value={prefs.storyTitle} onChange={(e) => setPrefs({...prefs, storyTitle: e.target.value})} className="bg-black border-gray-800 py-1 text-xs" />
+                            </div>
+                        </div>
+                    </div>
+                )}
+            </div>
+
+            {/* SIDE PANEL */}
+            {(showSummary || showCodex) && (
+                <div className="w-full md:w-80 bg-gray-950 border-l border-gray-800 flex flex-col absolute md:relative inset-0 md:inset-auto z-30 shadow-2xl">
+                    <div className="flex items-center justify-between p-3 border-b border-gray-800 bg-gray-900">
+                        <h3 className="text-xs font-bold uppercase tracking-widest text-gray-300 flex items-center gap-2">{showCodex ? <><BookOpen size={14} /> Codex</> : <><FileText size={14} /> Story Summary</>}</h3>
+                        <button onClick={() => { setShowSummary(false); setShowCodex(false); }} className="text-gray-500 hover:text-white"><X size={16} /></button>
+                    </div>
+                    <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
+                        {showCodex ? (
+                            <div className="space-y-6">
+                                {['people', 'places', 'items'].map((type, i) => {
+                                    const colors = [{ title: 'People', bg: 'bg-blue-900/30', text: 'text-blue-400', key: 'characters' }, { title: 'Locations', bg: 'bg-emerald-900/30', text: 'text-emerald-400', key: 'places' }, { title: 'Artifacts', bg: 'bg-amber-900/30', text: 'text-amber-400', key: 'items' }][i];
+                                    const entries = codex[colors.key] || {};
+                                    return (
+                                        <div key={type}>
+                                            <h4 className={`text-[10px] font-bold uppercase mb-2 flex items-center gap-2 ${colors.text}`}>{colors.title} <span className={`${colors.bg} px-1.5 py-0.5 rounded text-[9px]`}>{Object.keys(entries).length}</span></h4>
+                                            <div className="space-y-1.5">{Object.entries(entries).length === 0 && <p className="text-[10px] text-gray-600 italic">No records.</p>}{Object.entries(entries).map(([name, desc]) => <div key={name} className="bg-gray-900/50 p-2 rounded border border-gray-800/50 hover:border-gray-700 transition-colors"><div className="text-xs font-bold text-gray-300">{name}</div><div className="text-[10px] text-gray-500 mt-0.5 leading-snug">{desc}</div></div>)}</div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        ) : (
+                            <div className="space-y-4"><div className="text-[10px] text-gray-400 leading-relaxed font-mono bg-gray-900 p-3 rounded border border-gray-800">{summary}</div></div>
+                        )}
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
