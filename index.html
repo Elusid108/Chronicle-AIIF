@@ -3,8 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Chronicle: AI Storyteller</title>
+    <title>Chronicle: Canvas Edition</title>
     
+    <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
         tailwind.config = {
@@ -31,10 +32,13 @@
         }
     </script>
 
+    <!-- Google Fonts -->
     <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700&family=Inter:wght@300;400;600&family=Merriweather:ital,wght@0,300;0,400;0,700;1,400&display=swap" rel="stylesheet">
 
+    <!-- Babel for JSX -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
+    <!-- Import Map for Modules -->
     <script type="importmap">
     {
         "imports": {
@@ -54,7 +58,9 @@
         .nebula-loader {
             background: linear-gradient(-45deg, #0f172a, #1e1b4b, #312e81, #0f172a);
             background-size: 400% 400%;
+            animation: nebula 10s ease infinite;
         }
+        .nebula-pulse { animation: pulse 2s infinite; }
     </style>
 </head>
 <body>
@@ -67,7 +73,7 @@
             Settings, Book, Image as ImageIcon, Play, Send, Terminal, X, Cpu, 
             Eye, EyeOff, ChevronLeft, ChevronRight, BookOpen, Volume2, VolumeX, 
             FileText, Type, CheckCircle, Flag, Printer, Download, Sparkles, 
-            Mic, User, Home, AlertTriangle, Key, Lock
+            Mic, User, Home, AlertTriangle, Key, Lock, Star
         } from 'lucide-react';
 
         // --- UTILITIES ---
@@ -106,6 +112,7 @@
             return new Blob([wavBuffer], { type: 'audio/wav' });
         };
 
+        // --- VOICE METADATA ---
         const VOICE_META = {
             'Kore': { gender: 'F', pitch: 'Mid', style: 'Soothing' },
             'Fenrir': { gender: 'M', pitch: 'Low', style: 'Deep' },
@@ -118,6 +125,14 @@
         };
 
         const getVoiceMeta = (name) => VOICE_META[name] || VOICE_META['default'];
+
+        const voicesList = [
+            'Kore', 'Fenrir', 'Puck', 'Leda', 'Charon', 'Zephyr', 'Orus', 'Aoede', 
+            'Callirrhoe', 'Autonoe', 'Enceladus', 'Iapetus', 'Umbriel', 'Algieba', 
+            'Despina', 'Erinome', 'Algenib', 'Rasalgethi', 'Laomedeia', 'Achernar', 
+            'Alnilam', 'Schedar', 'Gacrux', 'Pulcherrima', 'Achird', 'Zubenelgenubi', 
+            'Vindemiatrix', 'Sadachbia', 'Sadaltager', 'Sulafat'
+        ];
 
         // --- COMPONENTS ---
 
@@ -207,7 +222,7 @@
                         </div>
                         <h1 className="text-2xl font-display font-bold text-white mb-2">Access Required</h1>
                         <p className="text-gray-400 text-sm mb-6">
-                            This application runs entirely in your browser. To access the AI models, please enter your Google Gemini API Key.
+                            To run Chronicle on GitHub Pages, please enter your Google Gemini API Key.
                         </p>
                         
                         <div className="space-y-4">
@@ -237,7 +252,7 @@
         // --- MAIN APPLICATION ---
 
         const App = () => {
-            // API Key State
+            // API Key State logic
             const [apiKey, setApiKey] = useState(() => localStorage.getItem('gemini_api_key') || '');
             
             // --- STATE ---
@@ -258,6 +273,15 @@
                 autoPlay: true,
                 endingLength: 5, 
             });
+
+            // Favorites State
+            const [favorites, setFavorites] = useState(() => {
+                try {
+                    return JSON.parse(localStorage.getItem('chronicle_fav_voices') || '[]');
+                } catch { return []; }
+            });
+
+            // New State for Initial Context
             const [initialContext, setInitialContext] = useState('');
 
             const [showSettings, setShowSettings] = useState(false);
@@ -298,14 +322,9 @@
             // Refs
             const textScrollRef = useRef(null);
 
-            // Save API Key wrapper
-            const handleSaveApiKey = (key) => {
-                localStorage.setItem('gemini_api_key', key);
-                setApiKey(key);
-            };
-
             // --- EFFECTS ---
 
+            // Scroll Text with Audio
             useEffect(() => {
                 let animationFrame;
                 const animateScroll = () => {
@@ -331,34 +350,49 @@
                 return () => cancelAnimationFrame(animationFrame);
             }, [isPlaying]);
 
+            // Auto-scroll slide
             useEffect(() => {
                 if (history.length > 0) {
                     setCurrentSlideIndex(history.length - 1);
                 }
             }, [history.length]);
 
+            // Reset Text Scroll Top on New Content
             useEffect(() => {
                 if (textScrollRef.current) {
                     textScrollRef.current.scrollTop = 0;
                 }
             }, [currentSlideIndex, history]); 
 
+            // Auto-Play Logic Logic
             useEffect(() => {
                 const currentTurn = history[currentSlideIndex];
+                // Only auto-play if it's the latest turn, AI turn, Audio exists, AND Image exists (Sync)
                 if (prefs.autoPlay && currentSlideIndex === history.length - 1 && currentTurn?.type === 'ai' && currentTurn.audio && currentTurn.image && !isPlaying) {
                      handleSpeak(currentTurn);
                 }
             }, [currentSlideIndex, history, prefs.autoPlay]);
 
-            // --- API LOGIC ---
+            // Save Favorites to LocalStorage
+            useEffect(() => {
+                localStorage.setItem('chronicle_fav_voices', JSON.stringify(favorites));
+            }, [favorites]);
 
-            const voices = [
-                'Kore', 'Fenrir', 'Puck', 'Leda', 'Charon', 'Zephyr', 'Orus', 'Aoede', 
-                'Callirrhoe', 'Autonoe', 'Enceladus', 'Iapetus', 'Umbriel', 'Algieba', 
-                'Despina', 'Erinome', 'Algenib', 'Rasalgethi', 'Laomedeia', 'Achernar', 
-                'Alnilam', 'Schedar', 'Gacrux', 'Pulcherrima', 'Achird', 'Zubenelgenubi', 
-                'Vindemiatrix', 'Sadachbia', 'Sadaltager', 'Sulafat'
-            ];
+            // Scroll to selected voice when settings open
+            useEffect(() => {
+                if (showSettings) {
+                    // Short timeout to ensure render is complete
+                    const timer = setTimeout(() => {
+                        const el = document.getElementById(`voice-${prefs.voice}`);
+                        if (el) {
+                            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        }
+                    }, 100);
+                    return () => clearTimeout(timer);
+                }
+            }, [showSettings, prefs.voice]);
+
+            // --- API LOGIC ---
 
             const callGemini = async (prompt, systemInstruction = "") => {
                 const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite-preview-02-05:generateContent?key=${apiKey}`;
@@ -377,6 +411,7 @@
                 const stylePrompt = config.style === 'custom' ? config.styleCustom : config.style;
                 const fullPrompt = `Style: ${stylePrompt}. ${imagePrompt}`;
 
+                // Attempt 1: Imagen (High Quality)
                 try {
                     const url = `https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key=${apiKey}`;
                     const payload = { 
@@ -396,15 +431,15 @@
                             return `data:image/png;base64,${data.predictions[0].bytesBase64Encoded}`;
                         }
                     }
-                    // Fallback to Flash Image if Imagen fails or isn't enabled
-                    throw new Error("Imagen failed, trying fallback");
+                    throw new Error(`Imagen API Error: ${response.status}`);
                 } catch (e) {
                     console.warn("Primary image generation failed, trying fallback...", e);
                     
+                    // Attempt 2: Nano Banana / Flash Image (Fallback)
                     try {
                         const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
                         const payload = {
-                            contents: [{ parts: [{ text: `Generate an image: ${fullPrompt}` }] }],
+                            contents: [{ parts: [{ text: fullPrompt }] }],
                             generationConfig: { responseModalities: ["IMAGE"] }
                         };
                         const response = await fetch(url, {
@@ -428,16 +463,12 @@
             };
 
             const generateSpeech = async (text, voiceOverride = null) => {
-                // Warning: TTS is an allowlisted feature on some keys.
                 const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite-preview-02-05:generateContent?key=${apiKey}`;
-                // Using standard generation for TTS if specific TTS model isn't public yet, 
-                // but assuming the user has access to a model that outputs audio or using standard logic.
-                // NOTE: Detailed TTS endpoint logic varies. Using standard endpoint for audio modality.
-                 const payload = {
-                    contents: [{ parts: [{ text: "Read this text aloud: " + text }] }],
+                // Using generic prompt for standard TTS via generateContent since specific TTS model access varies
+                const payload = {
+                    contents: [{ parts: [{ text: "Say this text: " + text }] }],
                     generationConfig: { responseModalities: ["AUDIO"], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voiceOverride || prefs.voice } } } }
                 };
-                
                 try {
                     const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
                     if (!response.ok) return null;
@@ -449,6 +480,7 @@
             // --- GAME ACTIONS ---
 
             const resetGame = () => {
+                // Complete Reset for New Story
                 setHistory([]);
                 setCodex({ characters: {}, places: {}, items: {} });
                 setCurrentSlideIndex(0);
@@ -578,10 +610,12 @@
                 }
 
                 try {
+                    // 1. Generate Text Immediately
                     const turnData = await callGemini(inputVal, systemPrompt);
                     updateCodexState(turnData.codex_updates);
                     setSummary(prev => isEnding ? turnData.summary_update : prev + " " + turnData.summary_update);
                     
+                    // Create Placeholder Turn
                     const newTurn = { 
                         ...turnData, 
                         image: null, 
@@ -590,6 +624,7 @@
                         userActionPreceding: promptType === 'initial' ? null : inputVal 
                     };
 
+                    // Update History (Display Text Immediately)
                     setHistory(prev => [...prev, newTurn]);
                     
                     if (promptType === 'initial') {
@@ -599,9 +634,10 @@
                         setCurrentSlideIndex(prev => prev + 1);
                     }
 
-                    setLoading(false); 
+                    setLoading(false); // Input unlocked
                     setGeneratingAssets(true); 
 
+                    // 2. Background Generation
                     const imagePromise = generateImage(turnData.image_prompt);
                     const audioPromise = prefs.autoPlay ? generateSpeech(turnData.narrative) : Promise.resolve(null);
 
@@ -616,14 +652,17 @@
                         return updated;
                     });
 
+                    // Handle Ending Logic
                     if (isEnding) {
                         const nextTurns = turnsRemaining - 1;
                         setTurnsRemaining(nextTurns);
                         
+                        // If we just finished the final turn (0 remaining)
                         if (nextTurns <= 0) {
                             setIsFinished(true);
-                            setTurnsRemaining(0); 
+                            setTurnsRemaining(0); // Clamp
                             
+                            // Auto-generate title
                             try {
                                 const titleData = await callGemini(`Generate a short, creative book title for this story based on the summary: "${summary}". Output JSON: {"title": "The Title"}`, "Output JSON only.");
                                 if (titleData.title) setExportDetails(prev => ({ ...prev, title: titleData.title }));
@@ -643,6 +682,8 @@
 
             const startGame = () => processTurn('initial', `Start the story. Context: ${initialContext}`);
             const handleTurn = (input) => processTurn('continue', `User action: "${input}". Continue story.`);
+
+            // --- RENDER HELPERS ---
 
             const getSystemPrompt = () => {
                 const settingVal = config.setting === 'custom' ? config.settingCustom : config.setting;
@@ -667,6 +708,7 @@
             const handleSpeak = async (turn) => {
                 if (!turn) return;
                 
+                // Toggle off if currently playing
                 if (isPlaying) { 
                     stopAudio(); 
                     return; 
@@ -675,6 +717,7 @@
                 setIsPlaying(true);
                 let wavBlob = turn.audio;
                 
+                // If we don't have the audio, generate it now and SAVE IT
                 if (!wavBlob) { 
                     wavBlob = await generateSpeech(turn.narrative); 
                     if (wavBlob) {
@@ -696,7 +739,8 @@
             const previewVoice = async (voiceName) => {
                 if (audioRef.current) audioRef.current.pause();
                 setPreviewPlaying(true);
-                const wavBlob = await generateSpeech(`Hello, this is ${voiceName}.`, voiceName);
+                // UPDATED PREVIEW TEXT
+                const wavBlob = await generateSpeech("I would love to be your narrator.", voiceName);
                 if (wavBlob) {
                     const audioUrl = URL.createObjectURL(wavBlob);
                     const audio = new Audio(audioUrl);
@@ -708,6 +752,16 @@
             const stopAudio = () => {
                 if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
                 setIsPlaying(false);
+            };
+
+            const toggleFavorite = (voiceName, e) => {
+                e.stopPropagation();
+                setFavorites(prev => {
+                    if (prev.includes(voiceName)) {
+                        return prev.filter(v => v !== voiceName);
+                    }
+                    return [...prev, voiceName];
+                });
             };
 
             const nextSlide = () => { if (currentSlideIndex < history.length - 1) setCurrentSlideIndex(c => c + 1); };
@@ -723,78 +777,94 @@
             const currentTurnData = history[currentSlideIndex];
             const isLatestSlide = currentSlideIndex === history.length - 1;
 
-            // --- RENDER ---
+            const renderSettings = () => {
+                // Sort voices: Favorites first, then alphabetical
+                const sortedVoices = [...voicesList].sort((a, b) => {
+                    const aFav = favorites.includes(a);
+                    const bFav = favorites.includes(b);
+                    if (aFav && !bFav) return -1;
+                    if (!aFav && bFav) return 1;
+                    return a.localeCompare(b);
+                });
 
-            if (!apiKey) {
-                return <ApiKeyModal onSave={handleSaveApiKey} />;
-            }
-
-            const renderSettings = () => (
-                <div className="absolute top-14 right-4 w-80 bg-gray-900 border border-gray-800 rounded-xl shadow-2xl z-50 p-4 overflow-y-auto max-h-[80vh] custom-scrollbar">
-                    <div className="flex justify-between items-center mb-4">
-                        <h3 className="text-xs font-bold uppercase text-gray-500 flex items-center gap-2"><Settings size={12}/> Preferences</h3>
-                        <button onClick={() => setShowSettings(false)}><X size={14} className="text-gray-500 hover:text-white"/></button>
-                    </div>
-                    <div className="space-y-6">
-                        <div>
-                            <label className="text-[10px] text-blue-400 font-bold block mb-2">INTERACTION MODE</label>
-                            <div className="flex gap-1">{['choice', 'text'].map(mode => <button key={mode} onClick={() => setConfig({...config, mode})} className={`flex-1 p-2 text-[10px] border rounded uppercase ${config.mode === mode ? 'bg-blue-900 border-blue-500 text-white' : 'border-gray-700 text-gray-500'}`}>{mode}</button>)}</div>
+                return (
+                    <div className="absolute top-14 right-4 w-80 bg-gray-900 border border-gray-800 rounded-xl shadow-2xl z-50 p-4 overflow-y-auto max-h-[80vh] custom-scrollbar">
+                        <div className="flex justify-between items-center mb-4">
+                            <h3 className="text-xs font-bold uppercase text-gray-500 flex items-center gap-2"><Settings size={12}/> Preferences</h3>
+                            <button onClick={() => setShowSettings(false)}><X size={14} className="text-gray-500 hover:text-white"/></button>
                         </div>
-                        
-                        <div>
-                            <label className="text-[10px] text-blue-400 font-bold block mb-2">NARRATOR VOICE</label>
-                            <div className="grid grid-cols-1 gap-2 max-h-48 overflow-y-auto custom-scrollbar border border-gray-800 rounded p-1">
-                                {voices.map(v => {
-                                    const meta = getVoiceMeta(v);
-                                    return (
-                                        <div key={v} onClick={() => setPrefs({...prefs, voice: v})} 
-                                             className={`flex items-center justify-between p-2 rounded cursor-pointer border ${prefs.voice === v ? 'bg-blue-900/30 border-blue-500' : 'hover:bg-gray-800 border-transparent'}`}>
-                                            <div className="flex items-center gap-2">
-                                                <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold ${meta.gender === 'F' ? 'bg-purple-900 text-purple-200' : 'bg-blue-900 text-blue-200'}`}>
-                                                    {meta.gender}
+                        <div className="space-y-6">
+                            <div>
+                                <label className="text-[10px] text-blue-400 font-bold block mb-2">INTERACTION MODE</label>
+                                <div className="flex gap-1">{['choice', 'text'].map(mode => <button key={mode} onClick={() => setConfig({...config, mode})} className={`flex-1 p-2 text-[10px] border rounded uppercase ${config.mode === mode ? 'bg-blue-900 border-blue-500 text-white' : 'border-gray-700 text-gray-500'}`}>{mode}</button>)}</div>
+                            </div>
+                            
+                            <div>
+                                <label className="text-[10px] text-blue-400 font-bold block mb-2">NARRATOR VOICE</label>
+                                <div className="grid grid-cols-1 gap-2 max-h-48 overflow-y-auto custom-scrollbar border border-gray-800 rounded p-1">
+                                    {sortedVoices.map(v => {
+                                        const meta = getVoiceMeta(v);
+                                        const isFavorite = favorites.includes(v);
+                                        return (
+                                            <div 
+                                                key={v} 
+                                                id={`voice-${v}`}
+                                                onClick={() => setPrefs({...prefs, voice: v})} 
+                                                className={`flex items-center justify-between p-2 rounded cursor-pointer border transition-all ${prefs.voice === v ? 'bg-blue-900/30 border-blue-500' : 'hover:bg-gray-800 border-transparent'}`}
+                                            >
+                                                <div className="flex items-center gap-3">
+                                                    <button onClick={(e) => { e.stopPropagation(); previewVoice(v); }} disabled={previewPlaying} className="text-gray-500 hover:text-white flex-shrink-0">
+                                                        {previewPlaying && prefs.voice === v ? <Volume2 size={16} className="animate-pulse text-blue-400"/> : <Play size={16} />}
+                                                    </button>
+                                                    <div>
+                                                        <div className="text-xs font-bold text-gray-300 flex items-center gap-2">
+                                                            {v}
+                                                            {isFavorite && <Star size={10} className="fill-yellow-500 text-yellow-500"/>}
+                                                        </div>
+                                                        <div className="text-[9px] text-gray-500 uppercase tracking-wider">{meta.style}</div>
+                                                    </div>
                                                 </div>
-                                                <div>
-                                                    <div className="text-xs font-bold text-gray-300">{v}</div>
-                                                    <div className="text-[9px] text-gray-500 uppercase tracking-wider">{meta.style}</div>
-                                                </div>
-                                            </div>
-                                            <div className="flex flex-col items-end gap-1">
-                                                <div className="flex gap-0.5">
-                                                    {[1,2,3].map(i => (
-                                                        <div key={i} className={`w-1 h-2 rounded-full ${
-                                                            (meta.pitch === 'Low' && i === 1) || (meta.pitch === 'Mid' && i <= 2) || (meta.pitch === 'High' && i <= 3) 
-                                                            ? 'bg-blue-500' : 'bg-gray-800'
-                                                        }`}></div>
-                                                    ))}
-                                                </div>
-                                                <button onClick={(e) => { e.stopPropagation(); previewVoice(v); }} disabled={previewPlaying} className="text-gray-500 hover:text-white">
-                                                    {previewPlaying && prefs.voice === v ? <Volume2 size={12} className="animate-pulse text-blue-400"/> : <Play size={12} />}
+                                                
+                                                <button onClick={(e) => toggleFavorite(v, e)} className="p-1 hover:bg-gray-700 rounded-full transition-colors">
+                                                    <Star size={14} className={isFavorite ? "fill-yellow-500 text-yellow-500" : "text-gray-600 hover:text-gray-400"} />
                                                 </button>
                                             </div>
-                                        </div>
-                                    );
-                                })}
+                                        );
+                                    })}
+                                </div>
+                            </div>
+
+                            <div className="flex items-center justify-between">
+                                <label className="text-[10px] text-blue-400 font-bold">AUTO-PLAY AUDIO</label>
+                                <button onClick={() => setPrefs({...prefs, autoPlay: !prefs.autoPlay})} className={`w-8 h-4 rounded-full relative transition-colors ${prefs.autoPlay ? 'bg-blue-600' : 'bg-gray-700'}`}><div className={`absolute top-0.5 w-3 h-3 bg-white rounded-full transition-transform ${prefs.autoPlay ? 'left-4.5' : 'left-0.5'}`} style={{left: prefs.autoPlay ? '18px' : '2px'}}></div></button>
                             </div>
                         </div>
-
-                        <div className="flex items-center justify-between">
-                            <label className="text-[10px] text-blue-400 font-bold">AUTO-PLAY AUDIO</label>
-                            <button onClick={() => setPrefs({...prefs, autoPlay: !prefs.autoPlay})} className={`w-8 h-4 rounded-full relative transition-colors ${prefs.autoPlay ? 'bg-blue-600' : 'bg-gray-700'}`}><div className={`absolute top-0.5 w-3 h-3 bg-white rounded-full transition-transform ${prefs.autoPlay ? 'left-4.5' : 'left-0.5'}`} style={{left: prefs.autoPlay ? '18px' : '2px'}}></div></button>
-                        </div>
                     </div>
-                </div>
-            );
+                );
+            };
+
+            // --- MAIN RENDER ---
+
+            if (!apiKey) {
+                return (
+                    <ApiKeyModal onSave={(key) => {
+                        localStorage.setItem('gemini_api_key', key);
+                        setApiKey(key);
+                    }} />
+                );
+            }
 
             if (view === 'setup') {
                 return (
                      <div className="min-h-screen w-full bg-black flex flex-col items-center justify-center p-6 text-gray-200 font-sans relative">
-                        <div className="absolute top-6 right-6">
+                        {/* SETUP HEADER BUTTONS */}
+                        <div className="absolute top-6 right-6 z-50">
                             <button onClick={() => setShowSettings(!showSettings)} className="p-2 bg-gray-900 rounded-lg text-gray-400 hover:text-white border border-gray-800 hover:border-blue-500/50 transition-all">
                                 <Settings size={20} />
                             </button>
                         </div>
 
-                        <div className="w-full max-w-2xl bg-gray-900 border border-gray-800 rounded-2xl p-8 shadow-2xl">
+                        <div className="w-full max-w-2xl bg-gray-900 border border-gray-800 rounded-2xl p-8 shadow-2xl relative z-10">
                             <div className="flex items-center gap-3 mb-8">
                                 <div className="p-3 bg-blue-600 rounded-lg"><Cpu className="text-white" /></div>
                                 <div><h1 className="text-3xl font-display font-bold text-white">CHRONICLE</h1><p className="text-gray-500 text-sm uppercase tracking-widest">Canvas Edition</p></div>
@@ -824,6 +894,9 @@
 
             return (
                 <div className="h-screen w-full flex flex-col md:flex-row bg-black text-gray-200 font-sans" onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}>
+                    {/* ... (styles imported in Head) ... */}
+                    
+                    {/* MAIN */}
                     <div className="flex-1 flex flex-col h-full relative z-10 bg-black min-w-0">
                         <div className="h-12 border-b border-gray-800 bg-gray-950 flex items-center justify-between px-4 shrink-0 z-20 relative">
                             <div className="flex items-center gap-4">
@@ -858,6 +931,7 @@
                             </div>
                         </div>
 
+                        {/* VISUALS AREA */}
                         <div className="h-[40vh] md:h-[45vh] bg-black border-b border-gray-900 relative shrink-0 group overflow-hidden">
                             {currentTurnData ? (
                                 currentTurnData.image ? (
@@ -881,6 +955,7 @@
                             <div className="absolute bottom-4 right-4 z-20"><Button variant="secondary" onClick={nextSlide} disabled={currentSlideIndex === history.length - 1} className="w-10 h-10 rounded-full !p-0 shadow-xl"><ChevronRight size={20} /></Button></div>
                         </div>
 
+                        {/* TEXT AREA */}
                         <div className="flex-1 flex flex-col min-h-0 relative">
                             {currentTurnData && (
                                 <div className="absolute top-4 right-6 z-30">
@@ -909,6 +984,7 @@
                             </div>
                         </div>
 
+                        {/* FOOTER */}
                         <div className="shrink-0 bg-black border-t border-gray-900 p-4 md:p-6 z-20 relative">
                               <div className="max-w-3xl mx-auto w-full">
                                 {isLatestSlide && !loading && !isFinished && !generatingAssets && (
@@ -936,6 +1012,7 @@
                              </div>
                         </div>
 
+                        {/* MODALS */}
                         {showSettings && renderSettings()}
                         
                         {showExportModal && (
