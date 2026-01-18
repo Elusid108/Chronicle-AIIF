@@ -114,14 +114,14 @@
 
         // --- VOICE METADATA ---
         const VOICE_META = {
-            'Kore': { gender: 'F', pitch: 'Mid', style: 'Soothing' },
-            'Fenrir': { gender: 'M', pitch: 'Low', style: 'Deep' },
-            'Puck': { gender: 'M', pitch: 'High', style: 'Playful' },
-            'Leda': { gender: 'F', pitch: 'High', style: 'Bright' },
-            'Charon': { gender: 'M', pitch: 'Low', style: 'Gravelly' },
-            'Zephyr': { gender: 'F', pitch: 'Mid', style: 'Calm' },
-            'Orus': { gender: 'M', pitch: 'Mid', style: 'Confident' },
-            'default': { gender: '?', pitch: 'Mid', style: 'Standard' }
+            'Kore': { style: 'Soothing' },
+            'Fenrir': { style: 'Deep' },
+            'Puck': { style: 'Playful' },
+            'Leda': { style: 'Bright' },
+            'Charon': { style: 'Gravelly' },
+            'Zephyr': { style: 'Calm' },
+            'Orus': { style: 'Confident' },
+            'default': { style: 'Standard' }
         };
 
         const getVoiceMeta = (name) => VOICE_META[name] || VOICE_META['default'];
@@ -213,6 +213,7 @@
         // --- AUTH COMPONENT ---
         const ApiKeyModal = ({ onSave }) => {
             const [key, setKey] = useState('');
+            const [showKey, setShowKey] = useState(false);
             
             return (
                 <div className="min-h-screen w-full bg-black flex flex-col items-center justify-center p-6 relative">
@@ -228,13 +229,21 @@
                         <div className="space-y-4">
                             <div className="text-left">
                                 <label className="text-xs font-bold text-gray-500 uppercase">API Key</label>
-                                <Input 
-                                    type="password" 
-                                    value={key} 
-                                    onChange={(e) => setKey(e.target.value)}
-                                    placeholder="AIzaSy..." 
-                                    className="mt-1"
-                                />
+                                <div className="relative">
+                                    <Input 
+                                        type={showKey ? "text" : "password"} 
+                                        value={key} 
+                                        onChange={(e) => setKey(e.target.value)}
+                                        placeholder="AIzaSy..." 
+                                        className="mt-1 pr-10"
+                                    />
+                                    <button 
+                                        onClick={() => setShowKey(!showKey)} 
+                                        className="absolute right-3 top-3.5 text-gray-500 hover:text-gray-300"
+                                    >
+                                        {showKey ? <EyeOff size={16}/> : <Eye size={16} />}
+                                    </button>
+                                </div>
                             </div>
                             <Button onClick={() => onSave(key)} disabled={!key} className="w-full py-3">
                                 Enter Simulation
@@ -252,7 +261,7 @@
         // --- MAIN APPLICATION ---
 
         const App = () => {
-            // API Key State logic
+            // API Key State
             const [apiKey, setApiKey] = useState(() => localStorage.getItem('gemini_api_key') || '');
             
             // --- STATE ---
@@ -367,7 +376,6 @@
             // Auto-Play Logic Logic
             useEffect(() => {
                 const currentTurn = history[currentSlideIndex];
-                // Only auto-play if it's the latest turn, AI turn, Audio exists, AND Image exists (Sync)
                 if (prefs.autoPlay && currentSlideIndex === history.length - 1 && currentTurn?.type === 'ai' && currentTurn.audio && currentTurn.image && !isPlaying) {
                      handleSpeak(currentTurn);
                 }
@@ -381,7 +389,6 @@
             // Scroll to selected voice when settings open
             useEffect(() => {
                 if (showSettings) {
-                    // Short timeout to ensure render is complete
                     const timer = setTimeout(() => {
                         const el = document.getElementById(`voice-${prefs.voice}`);
                         if (el) {
@@ -464,7 +471,7 @@
 
             const generateSpeech = async (text, voiceOverride = null) => {
                 const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite-preview-02-05:generateContent?key=${apiKey}`;
-                // Using generic prompt for standard TTS via generateContent since specific TTS model access varies
+                // Standard TTS via generateContent using audio modality
                 const payload = {
                     contents: [{ parts: [{ text: "Say this text: " + text }] }],
                     generationConfig: { responseModalities: ["AUDIO"], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voiceOverride || prefs.voice } } } }
@@ -480,7 +487,6 @@
             // --- GAME ACTIONS ---
 
             const resetGame = () => {
-                // Complete Reset for New Story
                 setHistory([]);
                 setCodex({ characters: {}, places: {}, items: {} });
                 setCurrentSlideIndex(0);
@@ -610,12 +616,10 @@
                 }
 
                 try {
-                    // 1. Generate Text Immediately
                     const turnData = await callGemini(inputVal, systemPrompt);
                     updateCodexState(turnData.codex_updates);
                     setSummary(prev => isEnding ? turnData.summary_update : prev + " " + turnData.summary_update);
                     
-                    // Create Placeholder Turn
                     const newTurn = { 
                         ...turnData, 
                         image: null, 
@@ -624,7 +628,6 @@
                         userActionPreceding: promptType === 'initial' ? null : inputVal 
                     };
 
-                    // Update History (Display Text Immediately)
                     setHistory(prev => [...prev, newTurn]);
                     
                     if (promptType === 'initial') {
@@ -634,10 +637,9 @@
                         setCurrentSlideIndex(prev => prev + 1);
                     }
 
-                    setLoading(false); // Input unlocked
+                    setLoading(false); 
                     setGeneratingAssets(true); 
 
-                    // 2. Background Generation
                     const imagePromise = generateImage(turnData.image_prompt);
                     const audioPromise = prefs.autoPlay ? generateSpeech(turnData.narrative) : Promise.resolve(null);
 
@@ -652,17 +654,14 @@
                         return updated;
                     });
 
-                    // Handle Ending Logic
                     if (isEnding) {
                         const nextTurns = turnsRemaining - 1;
                         setTurnsRemaining(nextTurns);
                         
-                        // If we just finished the final turn (0 remaining)
                         if (nextTurns <= 0) {
                             setIsFinished(true);
-                            setTurnsRemaining(0); // Clamp
+                            setTurnsRemaining(0); 
                             
-                            // Auto-generate title
                             try {
                                 const titleData = await callGemini(`Generate a short, creative book title for this story based on the summary: "${summary}". Output JSON: {"title": "The Title"}`, "Output JSON only.");
                                 if (titleData.title) setExportDetails(prev => ({ ...prev, title: titleData.title }));
@@ -707,17 +706,11 @@
 
             const handleSpeak = async (turn) => {
                 if (!turn) return;
-                
-                // Toggle off if currently playing
-                if (isPlaying) { 
-                    stopAudio(); 
-                    return; 
-                }
+                if (isPlaying) { stopAudio(); return; }
 
                 setIsPlaying(true);
                 let wavBlob = turn.audio;
                 
-                // If we don't have the audio, generate it now and SAVE IT
                 if (!wavBlob) { 
                     wavBlob = await generateSpeech(turn.narrative); 
                     if (wavBlob) {
@@ -731,15 +724,12 @@
                     audioRef.current = audio;
                     audio.play();
                     audio.onended = () => setIsPlaying(false);
-                } else { 
-                    setIsPlaying(false); 
-                }
+                } else { setIsPlaying(false); }
             };
 
             const previewVoice = async (voiceName) => {
                 if (audioRef.current) audioRef.current.pause();
                 setPreviewPlaying(true);
-                // UPDATED PREVIEW TEXT
                 const wavBlob = await generateSpeech("I would love to be your narrator.", voiceName);
                 if (wavBlob) {
                     const audioUrl = URL.createObjectURL(wavBlob);
@@ -778,7 +768,6 @@
             const isLatestSlide = currentSlideIndex === history.length - 1;
 
             const renderSettings = () => {
-                // Sort voices: Favorites first, then alphabetical
                 const sortedVoices = [...voicesList].sort((a, b) => {
                     const aFav = favorites.includes(a);
                     const bFav = favorites.includes(b);
