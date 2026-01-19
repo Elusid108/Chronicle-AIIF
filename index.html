@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Chronicle: Canvas Edition</title>
+    <title>Chronicle: Iterative Fiction Engine</title>
     
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -34,27 +34,31 @@
 
     <!-- Google Fonts -->
     <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700&family=Inter:wght@300;400;600&family=Merriweather:ital,wght@0,300;0,400;0,700;1,400&display=swap" rel="stylesheet">
-
-    <!-- Babel for JSX -->
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-
-    <!-- Import Map for Modules -->
+    
+    <!-- Import Map for React and Dependencies -->
     <script type="importmap">
     {
         "imports": {
             "react": "https://esm.sh/react@18.2.0",
             "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
-            "lucide-react": "https://esm.sh/lucide-react@0.292.0"
+            "lucide-react": "https://esm.sh/lucide-react@0.344.0"
         }
     }
     </script>
-
+    
+    <!-- Babel for JSX compilation -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
     <style>
-        body { background-color: #000; color: #e5e7eb; margin: 0; overflow: hidden; }
-        /* Custom Scrollbar */
+        /* Base styles */
+        body { margin: 0; background-color: #000; color: #e5e7eb; overflow: hidden; }
+        
+        /* Custom scrollbar to match the app's aesthetic */
         .custom-scrollbar::-webkit-scrollbar { width: 6px; }
         .custom-scrollbar::-webkit-scrollbar-track { background: #000; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #475569; }
+
         .nebula-loader {
             background: linear-gradient(-45deg, #0f172a, #1e1b4b, #312e81, #0f172a);
             background-size: 400% 400%;
@@ -75,12 +79,40 @@
 
     <script type="text/babel" data-type="module">
         import React, { useState, useEffect, useRef } from 'react';
-        import ReactDOM from 'react-dom/client';
+        import { createRoot } from 'react-dom/client';
         import { 
-            Settings, Book, Image as ImageIcon, Play, Send, Terminal, X, Cpu, 
-            Eye, EyeOff, ChevronLeft, ChevronRight, BookOpen, Volume2, VolumeX, 
-            FileText, Type, CheckCircle, Flag, Printer, Download, Sparkles, 
-            Mic, User, Home, AlertTriangle, Key, Lock, Star, Trash2
+            Settings, 
+            Book, 
+            Image as ImageIcon, 
+            Play, 
+            Send, 
+            Terminal, 
+            X, 
+            Cpu, 
+            Eye, 
+            EyeOff,
+            ChevronLeft,
+            ChevronRight,
+            BookOpen,
+            Volume2,
+            VolumeX,
+            FileText,
+            Type,
+            CheckCircle,
+            Flag,
+            Printer,
+            Download,
+            Sparkles,
+            Mic,
+            User,
+            Home,
+            AlertTriangle,
+            Star,
+            RefreshCw,
+            Key,
+            Activity,
+            Lock,
+            Trash2
         } from 'lucide-react';
 
         // --- UTILITIES ---
@@ -119,6 +151,7 @@
             return new Blob([wavBuffer], { type: 'audio/wav' });
         };
 
+        // Expanded Voice Meta
         const VOICE_META = {
             'Kore': { style: 'Soothing' },
             'Fenrir': { style: 'Deep' },
@@ -127,17 +160,34 @@
             'Charon': { style: 'Gravelly' },
             'Zephyr': { style: 'Calm' },
             'Orus': { style: 'Confident' },
+            'Aoede': { style: 'Musical' },
             'default': { style: 'Standard' }
         };
 
         const getVoiceMeta = (name) => VOICE_META[name] || VOICE_META['default'];
 
+        // Expanded Voices List
         const voicesList = [
             'Kore', 'Fenrir', 'Puck', 'Leda', 'Charon', 'Zephyr', 'Orus', 'Aoede', 
             'Callirrhoe', 'Autonoe', 'Enceladus', 'Iapetus', 'Umbriel', 'Algieba', 
             'Despina', 'Erinome', 'Algenib', 'Rasalgethi', 'Laomedeia', 'Achernar', 
             'Alnilam', 'Schedar', 'Gacrux', 'Pulcherrima', 'Achird', 'Zubenelgenubi', 
             'Vindemiatrix', 'Sadachbia', 'Sadaltager', 'Sulafat'
+        ];
+
+        // Changed default priority to 1.5-pro as requested
+        const TEXT_MODELS = [
+            'gemini-1.5-pro',
+            'gemini-2.5-flash-preview-09-2025',
+            'gemini-2.0-flash-exp',
+            'gemini-1.5-flash',
+            'gemini-1.5-flash-8b'
+        ];
+
+        // Strictly use the dedicated TTS endpoint. 
+        // Generic models (2.0-flash-exp) do NOT support the 'speechConfig' parameter and will fail immediately.
+        const TTS_MODELS = [
+            'gemini-2.5-flash-preview-tts'
         ];
 
         // --- COMPONENTS ---
@@ -152,12 +202,7 @@
                 danger: "bg-red-900/50 hover:bg-red-900 text-red-200 border border-red-800"
             };
             return (
-                <button 
-                    onClick={onClick} 
-                    disabled={disabled}
-                    className={`${baseStyle} ${variants[variant]} ${className}`}
-                    title={title}
-                >
+                <button onClick={onClick} disabled={disabled} className={`${baseStyle} ${variants[variant]} ${className}`} title={title}>
                     {children}
                 </button>
             );
@@ -216,7 +261,6 @@
             </div>
         );
 
-        // --- AUTH COMPONENT ---
         const ApiKeyModal = ({ onSave }) => {
             const [key, setKey] = useState('');
             const [showKey, setShowKey] = useState(false);
@@ -249,8 +293,9 @@
             
             return (
                 <div className="min-h-screen w-full bg-black flex flex-col items-center justify-center p-6 relative">
-                     <div className="w-full max-w-md bg-gray-900 border border-gray-800 rounded-2xl p-8 shadow-2xl text-center">
-                        <div className="p-4 bg-blue-900/20 rounded-full inline-block mb-4">
+                     <div className="w-full max-w-md bg-gray-900 border border-gray-800 rounded-2xl p-8 shadow-2xl text-center relative overflow-hidden">
+                        <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-blue-600 to-purple-600"></div>
+                        <div className="p-4 bg-blue-900/20 rounded-full inline-block mb-4 border border-blue-500/30">
                             <Lock className="text-blue-400 w-8 h-8" />
                         </div>
                         <h1 className="text-2xl font-display font-bold text-white mb-2">Access Required</h1>
@@ -297,17 +342,17 @@
                     </div>
                 </div>
             )
-        }
+        };
 
         // --- MAIN APPLICATION ---
 
-        const App = () => {
-            // API Key State
-            const [apiKey, setApiKey] = useState(() => localStorage.getItem('gemini_api_key') || '');
-            
-            // --- STATE ---
+        function App() {
+            const [apiKey, setApiKey] = useState('');
             const [view, setView] = useState('setup');
             
+            // Status State for Detailed Logging
+            const [status, setStatus] = useState('');
+
             // Config & Prefs
             const [config, setConfig] = useState({
                 setting: 'cyberpunk',
@@ -319,43 +364,36 @@
             const [prefs, setPrefs] = useState({
                 narrativeSize: 'text-lg', 
                 uiSize: 'text-sm',
-                voice: 'Kore',
+                voice: 'Kore', // Updated default
                 autoPlay: true,
                 endingLength: 5, 
             });
 
-            // Favorites State
             const [favorites, setFavorites] = useState(() => {
-                try {
-                    return JSON.parse(localStorage.getItem('chronicle_fav_voices') || '[]');
-                } catch { return []; }
+                try { return JSON.parse(localStorage.getItem('chronicle_fav_voices') || '[]'); } catch { return []; }
             });
 
-            // New State for Initial Context
             const [initialContext, setInitialContext] = useState('');
-
             const [showSettings, setShowSettings] = useState(false);
             const [showExportModal, setShowExportModal] = useState(false);
             const [showExitConfirm, setShowExitConfirm] = useState(false);
             const [exportDetails, setExportDetails] = useState({ title: 'The Unnamed Chronicle', author: 'Anonymous' });
 
-            // Game Logic State
+            // Game State
             const [history, setHistory] = useState([]); 
             const [codex, setCodex] = useState({ characters: {}, places: {}, items: {} });
             const [currentSlideIndex, setCurrentSlideIndex] = useState(0);
             const [summary, setSummary] = useState("The story has just begun.");
             const [userInput, setUserInput] = useState('');
             
-            // Ending State
+            // Ending
             const [isEnding, setIsEnding] = useState(false);
             const [turnsRemaining, setTurnsRemaining] = useState(null);
             const [isFinished, setIsFinished] = useState(false);
 
-            // UI/Loading State
+            // UI/Loading
             const [loading, setLoading] = useState(false);
             const [generatingAssets, setGeneratingAssets] = useState(false);
-            
-            // Panels
             const [showSummary, setShowSummary] = useState(false);
             const [showCodex, setShowCodex] = useState(false);
 
@@ -364,17 +402,26 @@
             const [previewPlaying, setPreviewPlaying] = useState(false);
             const audioRef = useRef(null);
 
-            // Touch
             const touchStart = useRef(null);
             const touchEnd = useRef(null);
             const minSwipeDistance = 50;
-
-            // Refs
             const textScrollRef = useRef(null);
 
             // --- EFFECTS ---
 
-            // Scroll Text with Audio
+            useEffect(() => {
+                const storedKey = localStorage.getItem('chronicle_api_key');
+                if (storedKey) {
+                    setApiKey(storedKey);
+                }
+            }, []);
+
+            const handleKeySave = (key) => {
+                const cleanKey = key.trim();
+                localStorage.setItem('chronicle_api_key', cleanKey);
+                setApiKey(cleanKey);
+            };
+
             useEffect(() => {
                 let animationFrame;
                 const animateScroll = () => {
@@ -390,31 +437,19 @@
                         animationFrame = requestAnimationFrame(animateScroll);
                     }
                 };
-
-                if (isPlaying) {
-                    animationFrame = requestAnimationFrame(animateScroll);
-                } else {
-                    cancelAnimationFrame(animationFrame);
-                }
-
+                if (isPlaying) animationFrame = requestAnimationFrame(animateScroll);
+                else cancelAnimationFrame(animationFrame);
                 return () => cancelAnimationFrame(animationFrame);
             }, [isPlaying]);
 
-            // Auto-scroll slide
             useEffect(() => {
-                if (history.length > 0) {
-                    setCurrentSlideIndex(history.length - 1);
-                }
+                if (history.length > 0) setCurrentSlideIndex(history.length - 1);
             }, [history.length]);
 
-            // Reset Text Scroll Top on New Content
             useEffect(() => {
-                if (textScrollRef.current) {
-                    textScrollRef.current.scrollTop = 0;
-                }
+                if (textScrollRef.current) textScrollRef.current.scrollTop = 0;
             }, [currentSlideIndex, history]); 
 
-            // Auto-Play Logic Logic
             useEffect(() => {
                 const currentTurn = history[currentSlideIndex];
                 if (prefs.autoPlay && currentSlideIndex === history.length - 1 && currentTurn?.type === 'ai' && currentTurn.audio && currentTurn.image && !isPlaying) {
@@ -422,65 +457,62 @@
                 }
             }, [currentSlideIndex, history, prefs.autoPlay]);
 
-            // Save Favorites to LocalStorage
             useEffect(() => {
                 localStorage.setItem('chronicle_fav_voices', JSON.stringify(favorites));
             }, [favorites]);
 
-            // Scroll to selected voice when settings open
             useEffect(() => {
                 if (showSettings) {
                     const timer = setTimeout(() => {
                         const el = document.getElementById(`voice-${prefs.voice}`);
-                        if (el) {
-                            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                        }
+                        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
                     }, 100);
                     return () => clearTimeout(timer);
                 }
             }, [showSettings, prefs.voice]);
 
-            // --- API LOGIC ---
-
-            const clearApiKey = () => {
-                if (confirm("Are you sure you want to remove your API Key?")) {
-                    localStorage.removeItem('gemini_api_key');
-                    setApiKey('');
-                    setShowSettings(false);
-                }
-            };
+            // --- API LOGIC (FALLBACK) ---
 
             const callGemini = async (prompt, systemInstruction = "") => {
-                const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite-preview-02-05:generateContent?key=${apiKey}`;
-                const payload = {
-                    contents: [{ parts: [{ text: prompt }] }],
-                    systemInstruction: { parts: [{ text: systemInstruction }] },
-                    generationConfig: { temperature: 0.8, maxOutputTokens: 2000, responseMimeType: "application/json" }
-                };
-                const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-                if (!response.ok) throw new Error(`API Error: ${response.status}`);
-                const data = await response.json();
-                return JSON.parse(data.candidates[0].content.parts[0].text);
+                let lastError = null;
+                for (const model of TEXT_MODELS) {
+                    try {
+                        setStatus(`Attempting narrative generation with ${model}...`);
+                        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+                        const payload = {
+                            contents: [{ parts: [{ text: prompt }] }],
+                            systemInstruction: { parts: [{ text: systemInstruction }] },
+                            generationConfig: { temperature: 0.8, maxOutputTokens: 2000, responseMimeType: "application/json" }
+                        };
+                        const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                        if (!response.ok) throw new Error(`Status ${response.status}`);
+                        const data = await response.json();
+                        return JSON.parse(data.candidates[0].content.parts[0].text);
+                    } catch (e) {
+                        console.warn(`Model ${model} failed: ${e.message}. Switching to next...`);
+                        setStatus(`Model ${model} failed (${e.message}). Switching...`);
+                        lastError = e;
+                        // Small delay to let UI update before freezing on next sync fetch
+                        await new Promise(r => setTimeout(r, 100));
+                    }
+                }
+                setStatus(`All text models failed. Check console.`);
+                throw lastError;
             };
 
             const generateImage = async (imagePrompt) => {
                 const stylePrompt = config.style === 'custom' ? config.styleCustom : config.style;
                 const fullPrompt = `Style: ${stylePrompt}. ${imagePrompt}`;
-
-                // Attempt 1: Imagen (High Quality)
+                
+                // Attempt 1: Imagen 4.0 (Primary)
                 try {
-                    const url = `https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key=${apiKey}`;
+                    setStatus("Rendering scene with imagen-4.0-generate-001...");
+                    const url = `https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-generate-001:predict?key=${apiKey}`;
                     const payload = { 
                         instances: [{ prompt: fullPrompt }], 
                         parameters: { sampleCount: 1, aspectRatio: "16:9" } 
                     };
-                    
-                    const response = await fetch(url, { 
-                        method: 'POST', 
-                        headers: { 'Content-Type': 'application/json' }, 
-                        body: JSON.stringify(payload) 
-                    });
-
+                    const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
                     if (response.ok) {
                         const data = await response.json();
                         if (data.predictions?.[0]?.bytesBase64Encoded) {
@@ -488,10 +520,11 @@
                         }
                     }
                     throw new Error(`Imagen API Error: ${response.status}`);
-                } catch (e) {
-                    console.warn("Primary image generation failed, trying fallback...", e);
+                } catch (e) { 
+                    console.warn("Imagen 4.0 failed, trying fallback...", e); 
+                    setStatus(`Imagen failed, trying fallback: ${e.message}`);
                     
-                    // Attempt 2: Nano Banana / Flash Image (Fallback)
+                    // Attempt 2: Gemini 2.0 Flash (Fallback)
                     try {
                         const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
                         const payload = {
@@ -514,23 +547,54 @@
                     } catch (e2) {
                         console.error("Fallback image generation failed", e2);
                     }
-                    return null;
                 }
+                return null;
             };
 
             const generateSpeech = async (text, voiceOverride = null) => {
-                const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite-preview-02-05:generateContent?key=${apiKey}`;
-                // Standard TTS via generateContent using audio modality
-                const payload = {
-                    contents: [{ parts: [{ text: "Say this text: " + text }] }],
-                    generationConfig: { responseModalities: ["AUDIO"], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voiceOverride || prefs.voice } } } }
-                };
-                try {
-                    const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-                    if (!response.ok) return null;
-                    const data = await response.json();
-                    return data.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data ? pcmToWav(data.candidates[0].content.parts[0].inlineData.data) : null;
-                } catch { return null; }
+                let lastError = null;
+                for (const model of TTS_MODELS) {
+                    try {
+                        setStatus(`Synthesizing audio with ${model}...`);
+                        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+                        const payload = {
+                            contents: [{ parts: [{ text }] }],
+                            generationConfig: { 
+                                responseModalities: ["AUDIO"], 
+                                speechConfig: { 
+                                    voiceConfig: { 
+                                        prebuiltVoiceConfig: { 
+                                            voiceName: voiceOverride || prefs.voice 
+                                        } 
+                                    } 
+                                } 
+                            }
+                        };
+                        const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                        if (!response.ok) throw new Error(`Status ${response.status}`);
+                        const data = await response.json();
+                        const audioData = data.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+                        if (audioData) {
+                            return pcmToWav(audioData);
+                        }
+                        throw new Error("No audio data in response");
+                    } catch (e) {
+                        console.warn(`TTS Model ${model} failed: ${e.message}. Switching...`);
+                        // Explicit delay to show user that the first choice failed
+                        setStatus(`TTS Model ${model} failed. Switching to next...`);
+                        await new Promise(r => setTimeout(r, 1000));
+                        lastError = e;
+                    }
+                }
+                return null;
+            };
+
+            const clearApiKey = () => {
+                if (confirm("Are you sure you want to remove your API Key?")) {
+                    localStorage.removeItem('chronicle_api_key');
+                    setApiKey('');
+                    setShowSettings(false);
+                }
             };
 
             // --- GAME ACTIONS ---
@@ -546,18 +610,15 @@
                 setIsFinished(false);
                 setLoading(false);
                 setGeneratingAssets(false);
+                setStatus('');
                 setInitialContext(''); 
                 setExportDetails({ title: 'The Unnamed Chronicle', author: 'Anonymous' });
                 stopAudio();
             };
 
             const confirmExit = () => {
-                if (history.length > 0 && !isFinished) {
-                    setShowExitConfirm(true);
-                } else {
-                    resetGame();
-                    setView('setup');
-                }
+                if (history.length > 0 && !isFinished) setShowExitConfirm(true);
+                else { resetGame(); setView('setup'); }
             };
 
             const updateCodexState = (updates) => {
@@ -569,11 +630,7 @@
                         if (catKey === 'character') catKey = 'characters';
                         else if (catKey === 'place') catKey = 'places';
                         else if (catKey === 'item') catKey = 'items';
-                        
-                        if (!next[catKey] && next[item.category?.toLowerCase() + 's']) {
-                             catKey = item.category?.toLowerCase() + 's';
-                        }
-
+                        if (!next[catKey] && next[item.category?.toLowerCase() + 's']) catKey = item.category?.toLowerCase() + 's';
                         if (next[catKey]) {
                             const existing = next[catKey][item.key] || "";
                             if (!existing.includes(item.entry)) {
@@ -586,64 +643,41 @@
             };
 
             const initiateEnding = () => {
-                setIsEnding(true);
-                setTurnsRemaining(prefs.endingLength);
-                alert(`The story will now conclude in ${prefs.endingLength} turns. Make them count!`);
+                if (window.confirm(`Are you sure you want to trigger the finale? The story will conclude in ${prefs.endingLength} turns.`)) {
+                    setIsEnding(true);
+                    setTurnsRemaining(prefs.endingLength);
+                }
+            };
+
+            const resumeStory = () => {
+                setIsEnding(false);
+                setIsFinished(false);
+                setTurnsRemaining(null);
             };
 
             const exportBook = () => {
                 const bookWindow = window.open('', '_blank');
+                const tocHtml = history.map((_, i) => `<a href="#ch${i+1}" class="chapter-link">Page ${i+1}</a>`).join('');
+                const contentHtml = history.map((turn, i) => `
+                    <div id="ch${i+1}" class="chapter ${i > 0 ? 'page-break' : ''}">
+                        <h3>Page ${i+1}</h3>
+                        ${turn.image ? `<img src="${turn.image}" class="chapter-img" />` : ''}
+                        <div class="chapter-text">${turn.narrative.replace(/\n/g, '<br/>')}</div>
+                    </div>
+                `).join('');
+
                 const html = `
-                    <html>
-                    <head>
-                        <title>${exportDetails.title} - Book Export</title>
-                        <style>
-                            @media print {
-                                @page { margin: 2cm; size: A4; }
-                                body { font-family: 'Georgia', serif; line-height: 1.6; color: #000; background: #fff; }
-                                .page-break { page-break-before: always; }
-                                a { text-decoration: none; color: #000; }
-                            }
-                            body { font-family: 'Georgia', serif; max-width: 800px; margin: 0 auto; padding: 40px; }
-                            .title-page { text-align: center; margin-top: 40vh; margin-bottom: 40vh; }
-                            .title-page h1 { font-size: 3em; margin-bottom: 0.5em; }
-                            .title-page h2 { font-size: 1.5em; font-weight: normal; font-style: italic; }
-                            .toc { margin-top: 4em; }
-                            .chapter-link { display: block; padding: 0.5em 0; border-bottom: 1px dotted #ccc; text-decoration: none; color: #333; }
-                            .chapter { margin-top: 4em; }
-                            .chapter-img { width: 100%; max-height: 500px; object-fit: contain; margin: 2em 0; border: 1px solid #eee; }
-                            .chapter-text { font-size: 1.1em; text-align: justify; white-space: pre-wrap; }
-                        </style>
-                    </head>
-                    <body>
-                        <div class="title-page">
-                            <h1>${exportDetails.title}</h1>
-                            <h2>by ${exportDetails.author}</h2>
-                            <p style="margin-top: 2em; font-size: 0.8em; color: #666;">Generated by Chronicle AI</p>
-                        </div>
-
-                        <div class="page-break"></div>
-
-                        <div class="toc">
-                            <h1>Table of Contents</h1>
-                            ${history.map((turn, i) => `<a href="#ch${i+1}" class="chapter-link">Page ${i+1}</a>`).join('')}
-                        </div>
-
-                        <div class="page-break"></div>
-
-                        ${history.map((turn, i) => `
-                            <div id="ch${i+1}" class="chapter ${i > 0 ? 'page-break' : ''}">
-                                <h3>Page ${i+1}</h3>
-                                ${turn.image ? `<img src="${turn.image}" class="chapter-img" alt="Illustration" />` : ''}
-                                <div class="chapter-text">${turn.narrative}</div>
-                            </div>
-                        `).join('')}
-
-                        <script>
-                            window.onload = () => { setTimeout(() => window.print(), 1000); };
-                        <\/script>
-                    </body>
-                    </html>
+                    <html><head><title>${exportDetails.title}</title>
+                    <style>
+                        @media print { @page { margin: 2cm; size: A4; } body { font-family: 'Georgia', serif; } .page-break { page-break-before: always; } }
+                        body { font-family: 'Georgia', serif; max-width: 800px; mx-auto; padding: 40px; }
+                        .chapter-img { width: 100%; max-height: 500px; object-fit: contain; margin: 1em 0; }
+                        .toc { margin-top: 4em; } .chapter-link { display: block; padding: 0.5em 0; border-bottom: 1px dotted #ccc; text-decoration: none; color: black; }
+                    </style></head><body>
+                    <h1 style="text-align:center;margin-top:40vh">${exportDetails.title}</h1><h2 style="text-align:center">by ${exportDetails.author}</h2>
+                    <div class="page-break"></div><div class="toc"><h1>Table of Contents</h1>${tocHtml}</div><div class="page-break"></div>
+                    ${contentHtml}
+                    <scr` + `ipt>window.onload=()=>{setTimeout(()=>window.print(),1000);}</scr` + `ipt></body></html>
                 `;
                 bookWindow.document.write(html);
                 bookWindow.document.close();
@@ -652,128 +686,76 @@
             const processTurn = async (promptType, inputVal) => {
                 stopAudio();
                 setLoading(true);
+                setStatus("Initializing core systems...");
                 
                 let systemPrompt = getSystemPrompt();
                 if (isEnding) {
-                    if (turnsRemaining > 1) {
-                        systemPrompt += `\nCRITICAL: The story is ENDING. You have ${turnsRemaining} turns remaining. Begin wrapping up plot threads.`;
-                    } else if (turnsRemaining === 1) {
-                        systemPrompt += `\nCRITICAL: This is the PENULTIMATE turn. Set the stage for the finale.`;
-                    } else {
-                        systemPrompt += `\nCRITICAL: This is the FINAL turn. Provide a satisfying conclusion to the story. DO NOT provide any choices in the JSON response.`;
-                    }
+                    if (turnsRemaining > 1) systemPrompt += `\nCRITICAL: The story is ENDING. You have ${turnsRemaining} turns remaining. Wrap up plot threads.`;
+                    else if (turnsRemaining === 1) systemPrompt += `\nCRITICAL: PENULTIMATE turn. Set stage for finale.`;
+                    else systemPrompt += `\nCRITICAL: FINAL turn. Satisfying conclusion. NO choices.`;
                 }
 
                 try {
                     const turnData = await callGemini(inputVal, systemPrompt);
                     updateCodexState(turnData.codex_updates);
                     setSummary(prev => isEnding ? turnData.summary_update : prev + " " + turnData.summary_update);
-                    
-                    const newTurn = { 
-                        ...turnData, 
-                        image: null, 
-                        audio: null, 
-                        type: 'ai', 
-                        userActionPreceding: promptType === 'initial' ? null : inputVal 
-                    };
-
+                    const newTurn = { ...turnData, image: null, audio: null, type: 'ai', userActionPreceding: promptType === 'initial' ? null : inputVal };
                     setHistory(prev => [...prev, newTurn]);
-                    
-                    if (promptType === 'initial') {
-                        setCurrentSlideIndex(0);
-                        setView('game'); 
-                    } else {
-                        setCurrentSlideIndex(prev => prev + 1);
-                    }
-
-                    setLoading(false); 
+                    if (promptType === 'initial') { setCurrentSlideIndex(0); setView('game'); } 
+                    else setCurrentSlideIndex(prev => prev + 1);
+                    setLoading(false);
                     setGeneratingAssets(true); 
-
+                    
+                    setStatus("Queueing multimedia generation...");
                     const imagePromise = generateImage(turnData.image_prompt);
                     const audioPromise = prefs.autoPlay ? generateSpeech(turnData.narrative) : Promise.resolve(null);
-
+                    
                     const [imageUrl, audioBlob] = await Promise.all([imagePromise, audioPromise]);
-
+                    
                     setHistory(prev => {
                         const updated = [...prev];
                         const index = updated.length - 1; 
-                        if (updated[index]) {
-                            updated[index] = { ...updated[index], image: imageUrl, audio: audioBlob };
-                        }
+                        if (updated[index]) updated[index] = { ...updated[index], image: imageUrl, audio: audioBlob };
                         return updated;
                     });
-
                     if (isEnding) {
                         const nextTurns = turnsRemaining - 1;
                         setTurnsRemaining(nextTurns);
-                        
                         if (nextTurns <= 0) {
-                            setIsFinished(true);
-                            setTurnsRemaining(0); 
-                            
+                            setIsFinished(true); setTurnsRemaining(0);
                             try {
-                                const titleData = await callGemini(`Generate a short, creative book title for this story based on the summary: "${summary}". Output JSON: {"title": "The Title"}`, "Output JSON only.");
+                                const titleData = await callGemini(`Generate short book title for: "${summary}". JSON: {"title": "Title"}`, "JSON only.");
                                 if (titleData.title) setExportDetails(prev => ({ ...prev, title: titleData.title }));
-                            } catch(e) { console.error("Title gen failed", e); }
+                            } catch(e) {}
                         }
                     }
-
-                } catch (error) {
-                    console.error(error);
-                    alert("Error processing turn. Please check your API key or try again.");
-                    setLoading(false);
-                } finally {
-                    setGeneratingAssets(false);
-                    setUserInput('');
-                }
+                } catch (error) { console.error(error); alert(`Simulation Error: ${error.message}`); setLoading(false); } 
+                finally { setGeneratingAssets(false); setUserInput(''); setStatus(''); }
             };
 
-            const startGame = () => processTurn('initial', `Start the story. Context: ${initialContext}`);
-            const handleTurn = (input) => processTurn('continue', `User action: "${input}". Continue story.`);
-
-            // --- RENDER HELPERS ---
-
+            const startGame = () => processTurn('initial', `Start story. Context: ${initialContext}`);
+            const handleTurn = (input) => processTurn('continue', `User action: "${input}". Continue.`);
             const getSystemPrompt = () => {
                 const settingVal = config.setting === 'custom' ? config.settingCustom : config.setting;
                 const styleVal = config.style === 'custom' ? config.styleCustom : config.style;
-                return `
-                    You are an advanced AI Game Master.
-                    GENRE: ${settingVal}, Visual Style: ${styleVal}
-                    CONTEXT: ${summary}. Codex: ${JSON.stringify(codex)}
-                    INSTRUCTIONS: Advance story. Maintain Codex.
-                    OUTPUT JSON: {
-                        "narrative": "Story text.",
-                        "choices": ["Option 1", "Option 2", "Option 3", "Option 4"],
-                        "summary_update": "Update summary.",
-                        "image_prompt": "Visual desc.",
-                        "codex_updates": [ { "category": "character|place|item", "key": "Name", "entry": "Trait" } ]
-                    }
-                    CRITICAL: Provide exactly 4 distinct choices if in choice mode, else empty.
-                    CRITICAL: For Codex updates, provide ONLY specific NEW details or state changes. Do NOT repeat what is already known in the Codex.
-                `;
+                return `AI Game Master. GENRE: ${settingVal}, STYLE: ${styleVal}. CONTEXT: ${summary}. Codex: ${JSON.stringify(codex)}. 
+                OUTPUT JSON: {"narrative": "text", "choices": ["1","2","3","4"], "summary_update": "text", "image_prompt": "desc", "codex_updates": [{"category":"character|place|item","key":"Name","entry":"Trait"}]}`;
             };
 
             const handleSpeak = async (turn) => {
                 if (!turn) return;
                 if (isPlaying) { stopAudio(); return; }
-
                 setIsPlaying(true);
                 let wavBlob = turn.audio;
-                
                 if (!wavBlob) { 
                     wavBlob = await generateSpeech(turn.narrative); 
-                    if (wavBlob) {
-                        setHistory(prev => prev.map(t => t === turn ? { ...t, audio: wavBlob } : t));
-                    }
+                    if (wavBlob) setHistory(prev => prev.map(t => t === turn ? { ...t, audio: wavBlob } : t));
                 }
-                
                 if (wavBlob) {
-                    const audioUrl = URL.createObjectURL(wavBlob);
-                    const audio = new Audio(audioUrl);
+                    const audio = new Audio(URL.createObjectURL(wavBlob));
                     audioRef.current = audio;
-                    audio.play();
-                    audio.onended = () => setIsPlaying(false);
-                } else { setIsPlaying(false); }
+                    audio.play(); audio.onended = () => setIsPlaying(false);
+                } else setIsPlaying(false);
             };
 
             const previewVoice = async (voiceName) => {
@@ -781,43 +763,57 @@
                 setPreviewPlaying(true);
                 const wavBlob = await generateSpeech("I would love to be your narrator.", voiceName);
                 if (wavBlob) {
-                    const audioUrl = URL.createObjectURL(wavBlob);
-                    const audio = new Audio(audioUrl);
-                    audio.play();
-                    audio.onended = () => setPreviewPlaying(false);
-                } else { setPreviewPlaying(false); }
+                    const audio = new Audio(URL.createObjectURL(wavBlob));
+                    audio.play(); audio.onended = () => setPreviewPlaying(false);
+                } else setPreviewPlaying(false);
             };
 
-            const stopAudio = () => {
-                if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
-                setIsPlaying(false);
-            };
-
-            const toggleFavorite = (voiceName, e) => {
-                e.stopPropagation();
-                setFavorites(prev => {
-                    if (prev.includes(voiceName)) {
-                        return prev.filter(v => v !== voiceName);
-                    }
-                    return [...prev, voiceName];
-                });
-            };
-
+            const stopAudio = () => { if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; } setIsPlaying(false); };
+            const toggleFavorite = (v, e) => { e.stopPropagation(); setFavorites(p => p.includes(v) ? p.filter(x => x !== v) : [...p, v]); };
             const nextSlide = () => { if (currentSlideIndex < history.length - 1) setCurrentSlideIndex(c => c + 1); };
             const prevSlide = () => { if (currentSlideIndex > 0) setCurrentSlideIndex(c => c - 1); };
-            const onTouchStart = (e) => { touchStart.current = e.targetTouches[0].clientX; touchEnd.current = null; }
-            const onTouchMove = (e) => { touchEnd.current = e.targetTouches[0].clientX; }
-            const onTouchEnd = () => {
-                if (!touchStart.current || !touchEnd.current) return;
-                const distance = touchStart.current - touchEnd.current;
-                if (distance > minSwipeDistance) nextSlide();
-                else if (distance < -minSwipeDistance) prevSlide();
-            }
+            const onTouchStart = (e) => { touchEnd.current = null; touchStart.current = e.targetTouches[0].clientX; };
+            const onTouchMove = (e) => { touchEnd.current = e.targetTouches[0].clientX; };
+            const onTouchEnd = () => { if (touchStart.current && touchEnd.current) (touchStart.current - touchEnd.current > minSwipeDistance) ? nextSlide() : (touchStart.current - touchEnd.current < -minSwipeDistance) && prevSlide(); };
 
             const currentTurnData = history[currentSlideIndex];
             const isLatestSlide = currentSlideIndex === history.length - 1;
 
-            const renderSettings = () => {
+            // --- RENDER ---
+
+            if (!apiKey) {
+                return (
+                    <ApiKeyModal onSave={handleKeySave} />
+                );
+            }
+
+            if (view === 'setup') {
+                return (
+                    <div className="min-h-screen w-full bg-black flex flex-col items-center justify-center p-6 text-gray-200 font-sans relative">
+                        <style>{`@import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700&family=Inter:wght@300;400;600&family=Merriweather:ital,wght@0,300;0,400;0,700;1,400&display=swap');`}</style>
+                        <div className="absolute top-6 right-6 z-50">
+                            <button onClick={() => setShowSettings(!showSettings)} className="p-2 bg-gray-900 rounded-lg text-gray-400 hover:text-white border border-gray-800 hover:border-blue-500/50 transition-all"><Settings size={20} /></button>
+                        </div>
+                        <div className="w-full max-w-2xl bg-gray-900 border border-gray-800 rounded-2xl p-8 shadow-2xl relative z-10">
+                            <div className="flex items-center gap-3 mb-8"><div className="p-3 bg-blue-600 rounded-lg"><Cpu className="text-white" /></div><div><h1 className="text-3xl font-display font-bold text-white uppercase">Chronicle</h1><p className="text-gray-500 text-sm uppercase tracking-widest font-sans">Iterative Fiction Engine</p></div></div>
+                            <div className="grid md:grid-cols-2 gap-6 mb-6">
+                                <Select label="Genre" value={config.setting} onChange={(v) => setConfig({...config, setting: v})} allowCustom={true} customValue={config.settingCustom} onCustomChange={(e) => setConfig({...config, settingCustom: e.target.value})} options={[{ value: 'fantasy', label: 'High Fantasy' }, { value: 'cyberpunk', label: 'Cyberpunk' }, { value: 'noir', label: 'Noir Detective' }, { value: 'scifi', label: 'Space Opera' }, { value: 'lovecraft', label: 'Eldritch Horror' }, { value: 'postapoc', label: 'Wasteland' }]} />
+                                <Select label="Visual Style" value={config.style} onChange={(v) => setConfig({...config, style: v})} allowCustom={true} customValue={config.styleCustom} onCustomChange={(e) => setConfig({...config, styleCustom: e.target.value})} options={[{ value: 'cinematic', label: 'Cinematic' }, { value: 'pixel_art', label: 'Pixel Art' }, { value: 'watercolor', label: 'Watercolor' }, { value: 'comic', label: 'Graphic Novel' }, { value: 'oil_painting', label: 'Oil Painting' }, { value: 'blueprint', label: 'Blueprint' }]} />
+                            </div>
+                            <div className="mb-6"><label className="text-xs uppercase tracking-wider text-gray-500 font-bold mb-2 block font-sans">Initial Context (Optional)</label><textarea value={initialContext} onChange={(e) => setInitialContext(e.target.value)} placeholder="Waking up in a derelict cryopod..." className="w-full bg-gray-950 border border-gray-800 rounded-lg p-3 text-sm text-gray-300 focus:outline-none focus:border-blue-500 resize-none h-24 font-serif"/></div>
+                            
+                            {/* Status Display in Setup */}
+                            {status && <div className="mb-4 p-3 bg-blue-900/20 border border-blue-500/30 rounded flex items-center gap-2 text-xs text-blue-300 font-mono"><Activity size={14} className="animate-pulse"/> {status}</div>}
+                            
+                            <Button onClick={startGame} className="w-full py-4 text-lg mt-6" disabled={loading}>{loading ? "Initializing..." : "Begin Simulation"}</Button>
+                        </div>
+                        {showSettings && renderSettings()}
+                    </div>
+                );
+            }
+
+            function renderSettings() {
+                // Sort voices: Favorites first, then alphabetical
                 const sortedVoices = [...voicesList].sort((a, b) => {
                     const aFav = favorites.includes(a);
                     const bFav = favorites.includes(b);
@@ -828,14 +824,10 @@
 
                 return (
                     <div className="absolute top-14 right-4 w-80 bg-gray-900 border border-gray-800 rounded-xl shadow-2xl z-50 p-4 overflow-y-auto max-h-[80vh] custom-scrollbar">
-                        <div className="flex justify-between items-center mb-4">
-                            <h3 className="text-xs font-bold uppercase text-gray-500 flex items-center gap-2"><Settings size={12}/> Preferences</h3>
-                            <button onClick={() => setShowSettings(false)}><X size={14} className="text-gray-500 hover:text-white"/></button>
-                        </div>
+                        <div className="flex justify-between items-center mb-4"><h3 className="text-xs font-bold uppercase text-gray-500 flex items-center gap-2"><Settings size={12}/> Preferences</h3><button onClick={() => setShowSettings(false)}><X size={14} className="text-gray-500 hover:text-white"/></button></div>
                         <div className="space-y-6">
-                            
                             <div>
-                                <label className="text-[10px] text-blue-400 font-bold block mb-2">API ACCESS</label>
+                                <label className="text-[10px] text-blue-400 font-bold block mb-2 font-sans">API ACCESS</label>
                                 <div className="flex items-center justify-between bg-black border border-gray-800 rounded p-2">
                                     <span className="text-gray-500 text-xs flex items-center gap-2"><CheckCircle size={12} className="text-green-500"/> Key Stored</span>
                                     <button onClick={clearApiKey} className="text-red-400 text-xs hover:text-red-300 hover:underline flex items-center gap-1">
@@ -844,148 +836,53 @@
                                 </div>
                             </div>
 
-                            <div>
-                                <label className="text-[10px] text-blue-400 font-bold block mb-2">INTERACTION MODE</label>
-                                <div className="flex gap-1">{['choice', 'text'].map(mode => <button key={mode} onClick={() => setConfig({...config, mode})} className={`flex-1 p-2 text-[10px] border rounded uppercase ${config.mode === mode ? 'bg-blue-900 border-blue-500 text-white' : 'border-gray-700 text-gray-500'}`}>{mode}</button>)}</div>
-                            </div>
-                            
-                            <div>
-                                <label className="text-[10px] text-blue-400 font-bold block mb-2">NARRATOR VOICE</label>
-                                <div className="grid grid-cols-1 gap-2 max-h-48 overflow-y-auto custom-scrollbar border border-gray-800 rounded p-1">
-                                    {sortedVoices.map(v => {
-                                        const meta = getVoiceMeta(v);
-                                        const isFavorite = favorites.includes(v);
-                                        return (
-                                            <div 
-                                                key={v} 
-                                                id={`voice-${v}`}
-                                                onClick={() => setPrefs({...prefs, voice: v})} 
-                                                className={`flex items-center justify-between p-2 rounded cursor-pointer border transition-all ${prefs.voice === v ? 'bg-blue-900/30 border-blue-500' : 'hover:bg-gray-800 border-transparent'}`}
-                                            >
-                                                <div className="flex items-center gap-3">
-                                                    <button onClick={(e) => { e.stopPropagation(); previewVoice(v); }} disabled={previewPlaying} className="text-gray-500 hover:text-white flex-shrink-0">
-                                                        {previewPlaying && prefs.voice === v ? <Volume2 size={16} className="animate-pulse text-blue-400"/> : <Play size={16} />}
-                                                    </button>
-                                                    <div>
-                                                        <div className="text-xs font-bold text-gray-300 flex items-center gap-2">
-                                                            {v}
-                                                            {isFavorite && <Star size={10} className="fill-yellow-500 text-yellow-500"/>}
-                                                        </div>
-                                                        <div className="text-[9px] text-gray-500 uppercase tracking-wider">{meta.style}</div>
-                                                    </div>
-                                                </div>
-                                                
-                                                <button onClick={(e) => toggleFavorite(v, e)} className="p-1 hover:bg-gray-700 rounded-full transition-colors">
-                                                    <Star size={14} className={isFavorite ? "fill-yellow-500 text-yellow-500" : "text-gray-600 hover:text-gray-400"} />
-                                                </button>
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                            </div>
-
-                            <div className="flex items-center justify-between">
-                                <label className="text-[10px] text-blue-400 font-bold">AUTO-PLAY AUDIO</label>
-                                <button onClick={() => setPrefs({...prefs, autoPlay: !prefs.autoPlay})} className={`w-8 h-4 rounded-full relative transition-colors ${prefs.autoPlay ? 'bg-blue-600' : 'bg-gray-700'}`}><div className={`absolute top-0.5 w-3 h-3 bg-white rounded-full transition-transform ${prefs.autoPlay ? 'left-4.5' : 'left-0.5'}`} style={{left: prefs.autoPlay ? '18px' : '2px'}}></div></button>
-                            </div>
+                            <div><label className="text-[10px] text-blue-400 font-bold block mb-2 font-sans">MODE</label><div className="flex gap-1">{['choice', 'text'].map(m => <button key={m} onClick={() => setConfig({...config, mode: m})} className={`flex-1 p-2 text-[10px] border rounded uppercase ${config.mode === m ? 'bg-blue-900 border-blue-500 text-white' : 'border-gray-700 text-gray-500'}`}>{m}</button>)}</div></div>
+                            <div><label className="text-[10px] text-blue-400 font-bold block mb-2 font-sans">NARRATOR</label><div className="grid grid-cols-1 gap-2 max-h-48 overflow-y-auto custom-scrollbar border border-gray-800 rounded p-1">{sortedVoices.map(v => {
+                                const meta = getVoiceMeta(v); const isFav = favorites.includes(v);
+                                return (<div key={v} id={`voice-${v}`} onClick={() => setPrefs({...prefs, voice: v})} className={`flex items-center justify-between p-2 rounded cursor-pointer border transition-all ${prefs.voice === v ? 'bg-blue-900/30 border-blue-500' : 'hover:bg-gray-800 border-transparent'}`}>
+                                    <div className="flex items-center gap-3"><button onClick={(e) => { e.stopPropagation(); previewVoice(v); }} disabled={previewPlaying} className="text-gray-500 hover:text-white flex-shrink-0">{previewPlaying && prefs.voice === v ? <Volume2 size={16} className="animate-pulse text-blue-400"/> : <Play size={16} />}</button><div><div className="text-xs font-bold text-gray-300 flex items-center gap-2">{v}{isFav && <Star size={10} className="fill-yellow-500 text-yellow-500"/>}</div><div className="text-[9px] text-gray-500 uppercase tracking-wider">{meta.style}</div></div></div>
+                                    <button onClick={(e) => toggleFavorite(v, e)} className="p-1 hover:bg-gray-700 rounded-full transition-colors"><Star size={14} className={isFav ? "fill-yellow-500 text-yellow-500" : "text-gray-600 hover:text-gray-400"} /></button></div>);
+                            })}</div></div>
+                            <div className="flex justify-between items-center"><label className="text-[10px] text-blue-400 font-bold font-sans uppercase">Auto-Play</label><button onClick={() => setPrefs({...prefs, autoPlay: !prefs.autoPlay})} className={`w-8 h-4 rounded-full relative transition-colors ${prefs.autoPlay ? 'bg-blue-600' : 'bg-gray-700'}`}><div className={`absolute top-0.5 w-3 h-3 bg-white rounded-full transition-transform ${prefs.autoPlay ? 'translate-x-4' : 'translate-x-0'}`}></div></button></div>
                         </div>
-                    </div>
-                );
-            };
-
-            // --- MAIN RENDER ---
-
-            if (!apiKey) {
-                return (
-                    <ApiKeyModal onSave={(key) => {
-                        localStorage.setItem('gemini_api_key', key);
-                        setApiKey(key);
-                    }} />
-                );
-            }
-
-            if (view === 'setup') {
-                return (
-                     <div className="min-h-screen w-full bg-black flex flex-col items-center justify-center p-6 text-gray-200 font-sans relative">
-                        {/* SETUP HEADER BUTTONS */}
-                        <div className="absolute top-6 right-6 z-50">
-                            <button onClick={() => setShowSettings(!showSettings)} className="p-2 bg-gray-900 rounded-lg text-gray-400 hover:text-white border border-gray-800 hover:border-blue-500/50 transition-all">
-                                <Settings size={20} />
-                            </button>
-                        </div>
-
-                        <div className="w-full max-w-2xl bg-gray-900 border border-gray-800 rounded-2xl p-8 shadow-2xl relative z-10">
-                            <div className="flex items-center gap-3 mb-8">
-                                <div className="p-3 bg-blue-600 rounded-lg"><Cpu className="text-white" /></div>
-                                <div><h1 className="text-3xl font-display font-bold text-white">CHRONICLE</h1><p className="text-gray-500 text-sm uppercase tracking-widest">Canvas Edition</p></div>
-                            </div>
-                              
-                             <div className="grid md:grid-cols-2 gap-6 mb-6">
-                                    <Select label="Genre" value={config.setting} onChange={(v) => setConfig({...config, setting: v})} allowCustom={true} customValue={config.settingCustom} onCustomChange={(e) => setConfig({...config, settingCustom: e.target.value})} options={[{ value: 'fantasy', label: 'High Fantasy' }, { value: 'cyberpunk', label: 'Cyberpunk' }, { value: 'noir', label: 'Noir Detective' }, { value: 'scifi', label: 'Space Opera' }, { value: 'lovecraft', label: 'Eldritch Horror' }, { value: 'postapoc', label: 'Wasteland' }]} />
-                                    <Select label="Visual Style" value={config.style} onChange={(v) => setConfig({...config, style: v})} allowCustom={true} customValue={config.styleCustom} onCustomChange={(e) => setConfig({...config, styleCustom: e.target.value})} options={[{ value: 'cinematic', label: 'Cinematic' }, { value: 'pixel_art', label: 'Pixel Art' }, { value: 'watercolor', label: 'Watercolor' }, { value: 'comic', label: 'Graphic Novel' }, { value: 'oil_painting', label: 'Oil Painting' }, { value: 'blueprint', label: 'Blueprint' }]} />
-                            </div>
-
-                            <div className="mb-6">
-                                <label className="text-xs uppercase tracking-wider text-gray-500 font-bold mb-2 block">CONTEXT (OPTIONAL)</label>
-                                <textarea 
-                                    value={initialContext} 
-                                    onChange={(e) => setInitialContext(e.target.value)} 
-                                    placeholder="e.g. Waking up in a cryopod on a derelict ship..."
-                                    className="w-full bg-gray-950 border border-gray-800 rounded-lg p-3 text-sm text-gray-300 focus:outline-none focus:border-blue-500 resize-none h-24 font-serif"
-                                />
-                             </div>
-
-                            <Button onClick={startGame} className="w-full py-4 text-lg mt-6" disabled={loading}>{loading ? "Initializing..." : "Begin Simulation"}</Button>
-                        </div>
-                        {showSettings && renderSettings()}
                     </div>
                 );
             }
 
             return (
                 <div className="h-screen w-full flex flex-col md:flex-row bg-black text-gray-200 font-sans" onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}>
+                    <style>{`
+                        @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700&family=Inter:wght@300;400;600&family=Merriweather:ital,wght@0,300;0,400;0,700;1,400&display=swap');
+                        .font-serif { font-family: 'Merriweather', serif; }
+                        .font-display { font-family: 'Cinzel', serif; }
+                        .nebula-loader { background: linear-gradient(-45deg, #0f172a, #1e1b4b, #312e81, #0f172a); background-size: 400% 400%; animation: nebula 10s ease infinite; }
+                        @keyframes nebula { 0% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } 100% { background-position: 0% 50%; } }
+                        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+                        .custom-scrollbar::-webkit-scrollbar-track { background: #000; }
+                        .custom-scrollbar::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+                        .nebula-pulse { animation: pulse 2s infinite; }
+                        @keyframes pulse { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
+                    `}</style>
                     
-                    {/* MAIN */}
                     <div className="flex-1 flex flex-col h-full relative z-10 bg-black min-w-0">
                         <div className="h-12 border-b border-gray-800 bg-gray-950 flex items-center justify-between px-4 shrink-0 z-20 relative">
-                            <div className="flex items-center gap-4">
-                                 <div className="text-gray-500 text-xs font-bold tracking-widest uppercase truncate max-w-[100px] md:max-w-none">{config.setting === 'custom' ? config.settingCustom : config.setting}</div>
-                                 <button onClick={confirmExit} className="text-gray-500 hover:text-white p-1" title="Back to Home"><Home size={16} /></button>
-                            </div>
-                            
-                            <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-xs text-gray-500 uppercase tracking-widest font-bold hidden md:block">
-                                Page {currentSlideIndex + 1} of {history.length || 1}
-                            </div>
-
+                            <div className="flex items-center gap-4"><div className="text-gray-500 text-xs font-bold tracking-widest uppercase truncate max-w-[100px] md:max-w-none">{config.setting === 'custom' ? config.settingCustom : config.setting}</div><button onClick={confirmExit} className="text-gray-500 hover:text-white p-1" title="Exit"><Home size={16} /></button></div>
+                            <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-xs text-gray-500 uppercase tracking-widest font-bold hidden md:block font-sans">Page {currentSlideIndex + 1} of {history.length || 1}</div>
                             <div className="flex gap-2 items-center">
-                                {!isEnding && !isFinished && history.length > 0 && (
-                                    <button onClick={initiateEnding} className="text-xs bg-red-900/30 text-red-400 border border-red-900/50 px-3 py-1 rounded hover:bg-red-900/50 flex items-center gap-2 mr-2">
-                                        <Flag size={12}/> End
-                                    </button>
-                                )}
-                                {isEnding && !isFinished && (
-                                    <div className="text-xs text-red-500 font-bold tracking-widest animate-pulse mr-2">
-                                        END: {turnsRemaining}
-                                    </div>
-                                )}
-                                {isFinished && (
-                                    <button onClick={() => setShowExportModal(true)} className="text-xs bg-emerald-900/30 text-emerald-400 border border-emerald-900/50 px-3 py-1 rounded hover:bg-emerald-900/50 flex items-center gap-2 mr-2">
-                                        <Printer size={12}/> Book
-                                    </button>
-                                )}
-
-                                <button onClick={() => setShowSettings(!showSettings)} className={`p-1.5 rounded hover:bg-gray-800 ${showSettings ? 'text-blue-400' : 'text-gray-500'}`} title="Settings"><Settings size={16} /></button>
-                                 <button onClick={() => { setShowCodex(!showCodex); setShowSummary(false); setShowSettings(false); }} className={`p-1.5 rounded hover:bg-gray-800 ${showCodex ? 'text-blue-400' : 'text-gray-500'}`} title="Codex"><BookOpen size={16} /></button>
-                                <button onClick={() => { setShowSummary(!showSummary); setShowCodex(false); setShowSettings(false); }} className={`p-1.5 rounded hover:bg-gray-800 ${showSummary ? 'text-blue-400' : 'text-gray-500'}`} title="Summary"><FileText size={16} /></button>
+                                {!isEnding && !isFinished && history.length > 0 && <button onClick={initiateEnding} className="text-xs bg-red-900/30 text-red-400 border border-red-900/50 px-3 py-1 rounded hover:bg-red-900/50 flex items-center gap-2 mr-2"><Flag size={12}/> End</button>}
+                                {isEnding && !isFinished && <div className="text-xs text-red-500 font-bold tracking-widest animate-pulse mr-2">END: {turnsRemaining}</div>}
+                                {isFinished && <><button onClick={resumeStory} className="text-xs bg-blue-900/30 text-blue-400 border border-blue-900/50 px-3 py-1 rounded hover:bg-blue-900/50 flex items-center gap-2 mr-2"><RefreshCw size={12}/> Resume</button><button onClick={() => setShowExportModal(true)} className="text-xs bg-emerald-900/30 text-emerald-400 border border-emerald-900/50 px-3 py-1 rounded hover:bg-emerald-900/50 flex items-center gap-2 mr-2"><Printer size={12}/> Book</button></>}
+                                <button onClick={() => setShowSettings(!showSettings)} className={`p-1.5 rounded hover:bg-gray-800 ${showSettings ? 'text-blue-400' : 'text-gray-500'}`}><Settings size={16} /></button>
+                                <button onClick={() => { setShowCodex(!showCodex); setShowSummary(false); setShowSettings(false); }} className={`p-1.5 rounded hover:bg-gray-800 ${showCodex ? 'text-blue-400' : 'text-gray-500'}`}><BookOpen size={16} /></button>
+                                <button onClick={() => { setShowSummary(!showSummary); setShowCodex(false); setShowSettings(false); }} className={`p-1.5 rounded hover:bg-gray-800 ${showSummary ? 'text-blue-400' : 'text-gray-500'}`}><FileText size={16} /></button>
                             </div>
                         </div>
 
-                        {/* VISUALS AREA */}
                         <div className="h-[40vh] md:h-[45vh] bg-black border-b border-gray-900 relative shrink-0 group overflow-hidden">
                             {currentTurnData ? (
                                 currentTurnData.image ? (
                                     <div className="w-full h-full relative">
-                                        <img src={currentTurnData.image} alt="Scene" className="w-full h-full object-contain mx-auto bg-black fade-in" />
+                                        <img src={currentTurnData.image} alt="Scene" className="w-full h-full object-contain mx-auto bg-black animate-in fade-in" />
                                         <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(circle_at_center,transparent_50%,rgba(0,0,0,0.4)_100%)]"></div>
                                     </div>
                                 ) : (
@@ -997,140 +894,54 @@
                                     </div>
                                 )
                             ) : (
-                                <div className="w-full h-full flex items-center justify-center text-gray-800"><span className="animate-pulse">Waiting...</span></div>
+                                !loading && <div className="w-full h-full flex items-center justify-center text-gray-800"><span className="animate-pulse">Waiting...</span></div>
+                            )}
+                            
+                            {/* RESTORED: Nebula Loader in image box during initial load (no turn data) */}
+                            {loading && !currentTurnData && (
+                                <div className="absolute inset-0 w-full h-full flex flex-col items-center justify-center text-blue-200 gap-4 nebula-loader z-10">
+                                    <Sparkles size={48} className="nebula-pulse opacity-80"/>
+                                    <span className="text-xs uppercase tracking-[0.3em] font-bold opacity-80 text-shadow-lg">
+                                        Manifesting Reality...
+                                    </span>
+                                </div>
                             )}
 
                             <div className="absolute bottom-4 left-4 z-20"><Button variant="secondary" onClick={prevSlide} disabled={currentSlideIndex === 0} className="w-10 h-10 rounded-full !p-0 shadow-xl"><ChevronLeft size={20} /></Button></div>
                             <div className="absolute bottom-4 right-4 z-20"><Button variant="secondary" onClick={nextSlide} disabled={currentSlideIndex === history.length - 1} className="w-10 h-10 rounded-full !p-0 shadow-xl"><ChevronRight size={20} /></Button></div>
                         </div>
 
-                        {/* TEXT AREA */}
                         <div className="flex-1 flex flex-col min-h-0 relative">
-                            {currentTurnData && (
-                                <div className="absolute top-4 right-6 z-30">
-                                    <button 
-                                        onClick={() => handleSpeak(currentTurnData)} 
-                                        className={`p-3 rounded-full shadow-lg transition-all duration-300 backdrop-blur-md border ${isPlaying 
-                                            ? 'bg-blue-600/90 text-white border-blue-400 scale-110' 
-                                            : 'bg-black/60 text-gray-400 border-gray-700 hover:text-white hover:bg-black/80'} 
-                                            ${generatingAssets && !currentTurnData.audio ? 'opacity-50 cursor-not-allowed' : ''}`} 
-                                        title="Read Aloud" 
-                                        disabled={generatingAssets && !currentTurnData.audio}
-                                    >
-                                        {isPlaying ? <VolumeX size={20} /> : <Volume2 size={20} />}
-                                    </button>
-                                </div>
-                            )}
-
-                            <div ref={textScrollRef} className="flex-1 overflow-y-auto bg-black p-6 md:p-8 custom-scrollbar">
-                                <div className="max-w-3xl mx-auto flex flex-col items-center text-center fade-in">
-                                    {currentTurnData && (
-                                        <div className="prose prose-invert prose-p:text-gray-300 prose-p:font-serif prose-p:leading-loose w-full">
-                                            {currentTurnData.narrative.split('\n').map((line, i) => <p key={i} className={`mb-4 leading-relaxed text-gray-300 font-serif ${prefs.narrativeSize}`}>{line}</p>)}
-                                        </div>
-                                    )}
-                                </div>
-                            </div>
+                            {currentTurnData && <div className="absolute top-4 right-6 z-30"><button onClick={() => handleSpeak(currentTurnData)} className={`p-3 rounded-full shadow-lg transition-all duration-300 backdrop-blur-md border ${isPlaying ? 'bg-blue-600/90 text-white border-blue-400 scale-110' : 'bg-black/60 text-gray-400 border-gray-700 hover:text-white hover:bg-black/80'} ${generatingAssets && !currentTurnData.audio ? 'opacity-50 cursor-not-allowed' : ''}`} disabled={generatingAssets && !currentTurnData.audio}>{isPlaying ? <VolumeX size={20} /> : <Volume2 size={20} />}</button></div>}
+                            <div ref={textScrollRef} className="flex-1 overflow-y-auto bg-black p-6 md:p-8 custom-scrollbar"><div className="max-w-3xl mx-auto flex flex-col items-center text-center">{currentTurnData && <div className="prose prose-invert prose-p:text-gray-300 prose-p:font-serif prose-p:leading-loose w-full">{currentTurnData.narrative.split('\n').map((line, i) => <p key={i} className={`mb-4 leading-relaxed text-gray-300 font-serif ${prefs.narrativeSize}`}>{line}</p>)}</div>}</div></div>
                         </div>
 
-                        {/* FOOTER */}
-                        <div className="shrink-0 bg-black border-t border-gray-900 p-4 md:p-6 z-20 relative">
-                              <div className="max-w-3xl mx-auto w-full">
-                                {isLatestSlide && !loading && !isFinished && !generatingAssets && (
-                                    <div className="fade-in">
-                                        {config.mode === 'choice' && currentTurnData?.choices?.length > 0 && (
-                                            <div className="grid grid-cols-2 gap-3">
-                                                {currentTurnData.choices.slice(0,4).map((choice, i) => (
-                                                    <button key={i} onClick={() => handleTurn(choice)} className={`p-4 text-center bg-gray-900 hover:bg-gray-800 border border-gray-800 hover:border-blue-500/50 rounded-lg text-gray-300 transition-all group h-full flex items-center justify-center font-sans ${prefs.uiSize}`}>
-                                                        <span className="font-bold text-blue-500 mr-2">{i + 1}.</span> {choice}
-                                                    </button>
-                                                ))}
-                                            </div>
-                                        )}
-                                        {config.mode === 'text' && (
-                                             <div className="flex gap-2">
-                                                <Input value={userInput} onChange={(e) => setUserInput(e.target.value)} placeholder="Enter action..." onKeyDown={(e) => e.key === 'Enter' && userInput && handleTurn(userInput)} disabled={loading} />
-                                                <Button onClick={() => handleTurn(userInput)} disabled={!userInput || loading} className="shrink-0"><Send size={14} /></Button>
-                                            </div>
-                                        )}
-                                    </div>
-                                )}
-                                {!isLatestSlide && <div className="text-center text-xs text-gray-600 italic">Navigate to the last page to continue...</div>}
-                                {isFinished && <div className="text-center text-sm text-blue-400 font-bold uppercase tracking-widest">Story Complete</div>}
-                                {generatingAssets && <div className="text-center text-xs text-blue-400/50 italic animate-pulse">Generating new possibilities...</div>}
-                             </div>
-                        </div>
+                        <div className="shrink-0 bg-black border-t border-gray-900 p-4 md:p-6 z-20 relative"><div className="max-w-3xl mx-auto w-full">
+                            {isLatestSlide && !loading && !isFinished && !generatingAssets && <div className="animate-in fade-in slide-in-from-bottom-2">
+                                {config.mode === 'choice' && currentTurnData?.choices?.length > 0 && <div className="grid grid-cols-2 gap-3">{currentTurnData.choices.slice(0,4).map((choice, i) => <button key={i} onClick={() => handleTurn(choice)} className={`p-4 text-center bg-gray-900 hover:bg-gray-800 border border-gray-800 hover:border-blue-500/50 rounded-lg text-gray-300 transition-all group h-full flex items-center justify-center font-sans ${prefs.uiSize}`}><span className="font-bold text-blue-500 mr-2">{i + 1}.</span> {choice}</button>)}</div>}
+                                {config.mode === 'text' && <div className="flex gap-2"><Input value={userInput} onChange={(e) => setUserInput(e.target.value)} placeholder="What do you do next?" onKeyDown={(e) => e.key === 'Enter' && userInput && handleTurn(userInput)} disabled={loading} /><Button onClick={() => handleTurn(userInput)} disabled={!userInput || loading} className="shrink-0"><Send size={14} /></Button></div>}
+                            </div>}
+                            
+                            {/* UPDATED: Status text now appears in footer during load (Text Gen phase) */}
+                            {loading && <div className="text-center text-xs text-blue-400 font-mono animate-pulse">{status}</div>}
+                            
+                            {/* UPDATED: Status text appears in footer during asset generation phase */}
+                            {!loading && generatingAssets && <div className="text-center text-xs text-blue-400/50 italic animate-pulse font-sans font-mono">{status}</div>}
+                            
+                            {!isLatestSlide && <div className="text-center text-xs text-gray-600 italic font-sans">Navigate to the current turn to continue the saga...</div>}
+                            {isFinished && <div className="text-center text-sm text-blue-400 font-bold uppercase tracking-widest font-sans">Simulation Complete</div>}
+                        </div></div>
 
-                        {/* MODALS */}
                         {showSettings && renderSettings()}
-                        
-                        {showExportModal && (
-                            <div className="absolute inset-0 bg-black/90 flex items-center justify-center z-[70] p-6">
-                                <div className="w-full max-w-md bg-gray-900 border border-gray-800 rounded-xl p-6 shadow-2xl">
-                                    <div className="flex justify-between items-center mb-6">
-                                        <h3 className="text-lg font-bold text-white flex items-center gap-2"><Book size={20}/> Finalize Chronicle</h3>
-                                        <button onClick={() => setShowExportModal(false)}><X size={20} className="text-gray-500 hover:text-white"/></button>
-                                    </div>
-                                    <div className="space-y-4 mb-6">
-                                        <div>
-                                            <label className="text-xs uppercase text-blue-400 font-bold block mb-2">Title of the Work</label>
-                                            <Input value={exportDetails.title} onChange={e => setExportDetails({...exportDetails, title: e.target.value})} className="bg-black/50" />
-                                        </div>
-                                        <div>
-                                            <label className="text-xs uppercase text-blue-400 font-bold block mb-2">Author Name</label>
-                                            <Input value={exportDetails.author} onChange={e => setExportDetails({...exportDetails, author: e.target.value})} className="bg-black/50" />
-                                        </div>
-                                    </div>
-                                    <Button onClick={() => { setShowExportModal(false); exportBook(); }} className="w-full py-3 text-base">
-                                        <Download size={18}/> Generate PDF Document
-                                    </Button>
-                                </div>
-                            </div>
-                        )}
-                        
-                        {showExitConfirm && (
-                            <div className="absolute inset-0 bg-black/90 flex items-center justify-center z-[70] p-6">
-                                <div className="w-full max-w-sm bg-gray-900 border border-red-900/50 rounded-xl p-6 text-center">
-                                    <AlertTriangle size={32} className="text-red-500 mx-auto mb-4"/>
-                                    <h3 className="text-lg font-bold text-white mb-2">Exit Simulation?</h3>
-                                    <p className="text-gray-400 text-sm mb-6">Progress will be lost.</p>
-                                    <div className="flex gap-3 justify-center"><Button onClick={()=>setShowExitConfirm(false)} variant="secondary">Cancel</Button><Button onClick={()=>{setShowExitConfirm(false); resetGame(); setView('setup');}} variant="danger">Quit</Button></div>
-                                </div>
-                            </div>
-                        )}
-
-                        {(showSummary || showCodex) && (
-                            <div className="absolute top-12 bottom-0 right-0 w-full md:w-80 bg-gray-950 border-l border-gray-800 shadow-2xl z-50 flex flex-col">
-                                <div className="flex items-center justify-between p-3 border-b border-gray-800 bg-gray-900">
-                                    <h3 className="text-xs font-bold uppercase tracking-widest text-gray-300 flex items-center gap-2">{showCodex ? <><BookOpen size={14} /> Codex</> : <><FileText size={14} /> Story Summary</>}</h3>
-                                    <button onClick={() => { setShowSummary(false); setShowCodex(false); }} className="text-gray-500 hover:text-white"><X size={16} /></button>
-                                </div>
-                                <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
-                                    {showCodex ? (
-                                        <div className="space-y-6">
-                                            {['people', 'places', 'items'].map((type, i) => {
-                                                const colors = [{ title: 'People', bg: 'bg-blue-900/30', text: 'text-blue-400', key: 'characters' }, { title: 'Locations', bg: 'bg-emerald-900/30', text: 'text-emerald-400', key: 'places' }, { title: 'Artifacts', bg: 'bg-amber-900/30', text: 'text-amber-400', key: 'items' }][i];
-                                                const entries = codex[colors.key] || {};
-                                                return (
-                                                    <div key={type}>
-                                                        <h4 className={`text-[10px] font-bold uppercase mb-2 flex items-center gap-2 ${colors.text}`}>{colors.title} <span className={`${colors.bg} px-1.5 py-0.5 rounded text-[9px]`}>{Object.keys(entries).length}</span></h4>
-                                                        <div className="space-y-1.5">{Object.entries(entries).length === 0 && <p className="text-[10px] text-gray-600 italic">No records.</p>}{Object.entries(entries).map(([name, desc]) => <div key={name} className="bg-gray-900/50 p-2 rounded border border-gray-800/50 hover:border-gray-700 transition-colors"><div className="text-xs font-bold text-gray-300">{name}</div><div className="text-[10px] text-gray-500 mt-0.5 leading-snug">{desc}</div></div>)}</div>
-                                                    </div>
-                                                );
-                                            })}
-                                        </div>
-                                    ) : (
-                                        <div className="space-y-4"><div className="text-[10px] text-gray-400 leading-relaxed font-mono bg-gray-900 p-3 rounded border border-gray-800">{summary}</div></div>
-                                    )}
-                                </div>
-                            </div>
-                        )}
+                        {showExportModal && <div className="absolute inset-0 bg-black/90 flex items-center justify-center z-50 p-6"><div className="w-full max-w-md bg-gray-900 border border-gray-800 rounded-xl p-6 shadow-2xl"><div className="flex justify-between items-center mb-6"><h3 className="text-lg font-bold text-white flex items-center gap-2"><Book size={20}/> Finalize Chronicle</h3><button onClick={() => setShowExportModal(false)}><X size={20} className="text-gray-500 hover:text-white"/></button></div><div className="space-y-4 mb-6"><div><label className="text-xs uppercase text-blue-400 font-bold block mb-2 font-sans">Book Title</label><Input value={exportDetails.title} onChange={e => setExportDetails({...exportDetails, title: e.target.value})} className="bg-black/50" /></div><div><label className="text-xs uppercase text-blue-400 font-bold block mb-2 font-sans">Author Name</label><Input value={exportDetails.author} onChange={e => setExportDetails({...exportDetails, author: e.target.value})} className="bg-black/50" /></div></div><Button onClick={() => { setShowExportModal(false); exportBook(); }} className="w-full py-3 text-base"><Download size={18}/> Generate PDF Document</Button></div></div>}
+                        {showExitConfirm && <div className="absolute inset-0 bg-black/90 flex items-center justify-center z-50 p-6"><div className="w-full max-w-sm bg-gray-900 border border-red-900/50 rounded-xl p-6 text-center"><AlertTriangle size={32} className="text-red-500 mx-auto mb-4"/><h3 className="text-lg font-bold text-white mb-2">Abandon Simulation?</h3><p className="text-gray-400 text-sm mb-6">Your current narrative path will be lost.</p><div className="flex gap-3 justify-center"><Button onClick={()=>setShowExitConfirm(false)} variant="secondary">Cancel</Button><Button onClick={()=>{setShowExitConfirm(false); resetGame(); setView('setup');}} variant="danger">Abandon Path</Button></div></div></div>}
+                        {(showSummary || showCodex) && <div className="absolute top-12 bottom-0 right-0 w-full md:w-80 bg-gray-950 border-l border-gray-800 shadow-2xl z-50 flex flex-col"><div className="flex items-center justify-between p-3 border-b border-gray-800 bg-gray-900"><h3 className="text-xs font-bold uppercase tracking-widest text-gray-300 flex items-center gap-2">{showCodex ? <><BookOpen size={14} /> Codex</> : <><FileText size={14} /> Summary</>}</h3><button onClick={() => { setShowSummary(false); setShowCodex(false); }} className="text-gray-500 hover:text-white"><X size={16} /></button></div><div className="flex-1 overflow-y-auto p-4 custom-scrollbar">{showCodex ? <div className="space-y-6">{['people', 'places', 'items'].map((type, i) => { const colors = [{ title: 'People', bg: 'bg-blue-900/30', text: 'text-blue-400', key: 'characters' }, { title: 'Locations', bg: 'bg-emerald-900/30', text: 'text-emerald-400', key: 'places' }, { title: 'Artifacts', bg: 'bg-amber-900/30', text: 'text-amber-400', key: 'items' }][i]; const entries = codex[colors.key] || {}; return (<div key={type}><h4 className={`text-[10px] font-bold uppercase mb-2 flex items-center gap-2 ${colors.text}`}>{colors.title} <span className={`${colors.bg} px-1.5 py-0.5 rounded text-[9px]`}>{Object.keys(entries).length}</span></h4><div className="space-y-1.5">{Object.entries(entries).length === 0 && <p className="text-[10px] text-gray-600 italic">No records yet.</p>}{Object.entries(entries).map(([name, desc]) => <div key={name} className="bg-gray-900/50 p-2 rounded border border-gray-800/50 hover:border-gray-700 transition-colors"><div className="text-xs font-bold text-gray-300">{name}</div><div className="text-[10px] text-gray-500 mt-0.5 leading-snug">{desc}</div></div>)}</div></div>); })}</div> : <div className="space-y-4"><div className="text-[10px] text-gray-400 leading-relaxed font-mono bg-gray-900 p-3 rounded border border-gray-800">{summary}</div></div>}</div></div>}
                     </div>
                 </div>
             );
         }
 
-        const root = ReactDOM.createRoot(document.getElementById('root'));
+        const root = createRoot(document.getElementById('root'));
         root.render(<App />);
     </script>
 </body>
