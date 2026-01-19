@@ -50,7 +50,7 @@
     </script>
 
     <style>
-        body { background-color: #000; color: #e5e7eb; }
+        body { background-color: #000; color: #e5e7eb; margin: 0; overflow: hidden; }
         /* Custom Scrollbar */
         .custom-scrollbar::-webkit-scrollbar { width: 6px; }
         .custom-scrollbar::-webkit-scrollbar-track { background: #000; }
@@ -61,6 +61,13 @@
             animation: nebula 10s ease infinite;
         }
         .nebula-pulse { animation: pulse 2s infinite; }
+        @keyframes pulse {
+            0%, 100% { opacity: 0.6; }
+            50% { opacity: 1; }
+        }
+        .text-shadow-lg {
+            text-shadow: 0 0 15px rgba(59, 130, 246, 0.5);
+        }
     </style>
 </head>
 <body>
@@ -112,7 +119,6 @@
             return new Blob([wavBuffer], { type: 'audio/wav' });
         };
 
-        // --- VOICE METADATA ---
         const VOICE_META = {
             'Kore': { style: 'Soothing' },
             'Fenrir': { style: 'Deep' },
@@ -598,15 +604,15 @@
                                 .page-break { page-break-before: always; }
                                 a { text-decoration: none; color: #000; }
                             }
-                            body { font-family: 'Georgia', serif; max-width: 800px; mx-auto; padding: 40px; }
+                            body { font-family: 'Georgia', serif; max-width: 800px; margin: 0 auto; padding: 40px; }
                             .title-page { text-align: center; margin-top: 40vh; margin-bottom: 40vh; }
                             .title-page h1 { font-size: 3em; margin-bottom: 0.5em; }
                             .title-page h2 { font-size: 1.5em; font-weight: normal; font-style: italic; }
                             .toc { margin-top: 4em; }
-                            .chapter-link { display: block; padding: 0.5em 0; border-bottom: 1px dotted #ccc; }
+                            .chapter-link { display: block; padding: 0.5em 0; border-bottom: 1px dotted #ccc; text-decoration: none; color: #333; }
                             .chapter { margin-top: 4em; }
                             .chapter-img { width: 100%; max-height: 500px; object-fit: contain; margin: 2em 0; border: 1px solid #eee; }
-                            .chapter-text { font-size: 1.1em; text-align: justify; }
+                            .chapter-text { font-size: 1.1em; text-align: justify; white-space: pre-wrap; }
                         </style>
                     </head>
                     <body>
@@ -629,7 +635,7 @@
                             <div id="ch${i+1}" class="chapter ${i > 0 ? 'page-break' : ''}">
                                 <h3>Page ${i+1}</h3>
                                 ${turn.image ? `<img src="${turn.image}" class="chapter-img" alt="Illustration" />` : ''}
-                                <div class="chapter-text">${turn.narrative.replace(/\n/g, '<br/>')}</div>
+                                <div class="chapter-text">${turn.narrative}</div>
                             </div>
                         `).join('')}
 
@@ -799,12 +805,13 @@
 
             const nextSlide = () => { if (currentSlideIndex < history.length - 1) setCurrentSlideIndex(c => c + 1); };
             const prevSlide = () => { if (currentSlideIndex > 0) setCurrentSlideIndex(c => c - 1); };
-            const onTouchStart = (e) => { touchEnd.current = null; touchStart.current = e.targetTouches[0].clientX; }
+            const onTouchStart = (e) => { touchStart.current = e.targetTouches[0].clientX; touchEnd.current = null; }
             const onTouchMove = (e) => { touchEnd.current = e.targetTouches[0].clientX; }
             const onTouchEnd = () => {
                 if (!touchStart.current || !touchEnd.current) return;
-                if (touchStart.current - touchEnd.current > minSwipeDistance) nextSlide();
-                else if (touchStart.current - touchEnd.current < -minSwipeDistance) prevSlide();
+                const distance = touchStart.current - touchEnd.current;
+                if (distance > minSwipeDistance) nextSlide();
+                else if (distance < -minSwipeDistance) prevSlide();
             }
 
             const currentTurnData = history[currentSlideIndex];
@@ -924,7 +931,7 @@
                                     value={initialContext} 
                                     onChange={(e) => setInitialContext(e.target.value)} 
                                     placeholder="e.g. Waking up in a cryopod on a derelict ship..."
-                                    className="w-full bg-gray-950 border border-gray-800 rounded-lg p-3 text-sm text-gray-300 focus:outline-none focus:border-blue-500 resize-none h-24"
+                                    className="w-full bg-gray-950 border border-gray-800 rounded-lg p-3 text-sm text-gray-300 focus:outline-none focus:border-blue-500 resize-none h-24 font-serif"
                                 />
                              </div>
 
@@ -937,7 +944,6 @@
 
             return (
                 <div className="h-screen w-full flex flex-col md:flex-row bg-black text-gray-200 font-sans" onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}>
-                    {/* ... (styles imported in Head) ... */}
                     
                     {/* MAIN */}
                     <div className="flex-1 flex flex-col h-full relative z-10 bg-black min-w-0">
@@ -1035,7 +1041,7 @@
                                         {config.mode === 'choice' && currentTurnData?.choices?.length > 0 && (
                                             <div className="grid grid-cols-2 gap-3">
                                                 {currentTurnData.choices.slice(0,4).map((choice, i) => (
-                                                    <button key={i} onClick={() => handleTurn(choice)} className={`p-4 text-center bg-gray-900 hover:bg-gray-800 border border-gray-800 hover:border-blue-500/50 rounded-lg text-gray-300 transition-all group h-full flex items-center justify-center ${prefs.uiSize}`}>
+                                                    <button key={i} onClick={() => handleTurn(choice)} className={`p-4 text-center bg-gray-900 hover:bg-gray-800 border border-gray-800 hover:border-blue-500/50 rounded-lg text-gray-300 transition-all group h-full flex items-center justify-center font-sans ${prefs.uiSize}`}>
                                                         <span className="font-bold text-blue-500 mr-2">{i + 1}.</span> {choice}
                                                     </button>
                                                 ))}
@@ -1059,7 +1065,7 @@
                         {showSettings && renderSettings()}
                         
                         {showExportModal && (
-                            <div className="absolute inset-0 bg-black/90 flex items-center justify-center z-50 p-6">
+                            <div className="absolute inset-0 bg-black/90 flex items-center justify-center z-[70] p-6">
                                 <div className="w-full max-w-md bg-gray-900 border border-gray-800 rounded-xl p-6 shadow-2xl">
                                     <div className="flex justify-between items-center mb-6">
                                         <h3 className="text-lg font-bold text-white flex items-center gap-2"><Book size={20}/> Finalize Chronicle</h3>
@@ -1083,7 +1089,7 @@
                         )}
                         
                         {showExitConfirm && (
-                            <div className="absolute inset-0 bg-black/90 flex items-center justify-center z-50 p-6">
+                            <div className="absolute inset-0 bg-black/90 flex items-center justify-center z-[70] p-6">
                                 <div className="w-full max-w-sm bg-gray-900 border border-red-900/50 rounded-xl p-6 text-center">
                                     <AlertTriangle size={32} className="text-red-500 mx-auto mb-4"/>
                                     <h3 className="text-lg font-bold text-white mb-2">Exit Simulation?</h3>
