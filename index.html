@@ -846,10 +846,23 @@
             const getSystemPrompt = () => {
                 const settingVal = config.setting === 'custom' ? config.settingCustom : config.setting;
                 const styleVal = config.style === 'custom' ? config.styleCustom : config.style;
-                return `AI Game Master. GENRE: ${settingVal}, STYLE: ${styleVal}. CONTEXT: ${summary}. CODEX: ${JSON.stringify(codex)}. 
-                INSTRUCTIONS: 1. Write narrative. 2. Update summary. 3. Update Codex. 
-                CRITICAL IMAGE_PROMPT: Visual director. NO names. Describe visually (e.g. "scarred cyborg"). Include mood/lighting. 
-                OUTPUT JSON: {"narrative": "text", "choices": ["1","2","3","4"], "summary_update": "text", "image_prompt": "desc", "codex_updates": [{"category":"character|place|item","key":"Name","entry":"Trait"}]}`;
+                
+                return `AI Game Master. GENRE: ${settingVal}, STYLE: ${styleVal}. 
+                CONTEXT (Running Log): ${summary}. 
+                CODEX (Known Facts): ${JSON.stringify(codex)}. 
+                
+                INSTRUCTIONS:
+                1. Write the next narrative segment. **IMPORTANT: Use SECOND PERSON perspective ("You are...", "You see..."). The player IS the protagonist.**
+                2. Update the summary with a concise log of this turn.
+                3. Update Codex with NEW info.
+                
+                CRITICAL FOR IMAGE_PROMPT: 
+                You are a visual director. The image generator DOES NOT know the Codex. 
+                When writing 'image_prompt', DO NOT use character names (e.g. "Kael"). 
+                Instead, describe them visually based on their Codex entry (e.g. "a scar-faced warrior with a cybernetic arm"). 
+                Include lighting, mood, and the visual style (${styleVal}).
+                
+                OUTPUT JSON: {"narrative": "text", "choices": ["1","2","3","4"], "summary_update": "text", "image_prompt": "highly detailed visual description", "codex_updates": [{"category":"character|place|item","key":"Name","entry":"Trait"}]}`;
             };
 
             const handleSpeak = async (turn) => {
@@ -868,13 +881,11 @@
 
                 if (audioContent === 'browser_tts') {
                     if ('speechSynthesis' in window) {
-                        // Added buffer dots to prevent start clipping
                         const utterance = new SpeechSynthesisUtterance("... " + (turn.narrative || ''));
                         utterance.rate = 1.0; 
                         utterance.pitch = 1.0;
                         utterance.onend = () => { setIsPlaying(false); playingTurnRef.current = null; };
                         
-                        // Short timeout to ensure audio context is ready
                         setTimeout(() => window.speechSynthesis.speak(utterance), 250);
                     } else { setIsPlaying(false); playingTurnRef.current = null; }
                 } else if (audioContent) {
@@ -911,16 +922,12 @@
 
             const currentTurnData = history[currentSlideIndex];
             
-            // PERSISTENT IMAGE LOGIC: 
-            // If current turn has no image but we are generating, use the PREVIOUS turn's image as a placeholder.
             let displayImage = currentTurnData?.image;
             let isBlurring = false;
             
-            // Check if we are waiting for an image on this turn specifically
             const isWaitingForImage = currentTurnData?.type === 'ai' && !currentTurnData.image && generatingAssets.image;
 
             if (isWaitingForImage) {
-                // Find last valid image in history
                 for (let i = currentSlideIndex - 1; i >= 0; i--) {
                     if (history[i]?.image) {
                         displayImage = history[i].image;
