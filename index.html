@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Chronicle: Iterative Fiction Engine</title>
     
-    <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
         tailwind.config = {
@@ -32,10 +31,8 @@
         }
     </script>
 
-    <!-- Google Fonts -->
     <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700&family=Inter:wght@300;400;600&family=Merriweather:ital,wght@0,300;0,400;0,700;1,400&display=swap" rel="stylesheet">
     
-    <!-- Import Map for React and Dependencies -->
     <script type="importmap">
     {
         "imports": {
@@ -46,7 +43,6 @@
     }
     </script>
     
-    <!-- Babel for JSX compilation -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     
     <style>
@@ -196,19 +192,6 @@
         const getVoiceMeta = (name) => VOICE_META[name] || VOICE_META['default'];
 
         const voicesList = Object.keys(VOICE_META).filter(v => v !== 'default');
-
-        // UPDATED: Removed 1.5-pro. Priority is now 2.5 Flash Preview (Newest) -> 2.0 Flash Lite (Speed)
-        const TEXT_MODELS = [
-            'gemini-2.5-flash-preview-09-2025',
-            'gemini-2.0-flash-lite-preview-02-05',
-            'gemini-1.5-flash',
-            'gemini-1.5-flash-8b'
-        ];
-
-        // SPEECH: Strictly 2.5 Flash TTS (Required for personas)
-        const TTS_MODELS = [
-            'gemini-2.5-flash-preview-tts'
-        ];
 
         // --- COMPONENTS ---
 
@@ -489,7 +472,7 @@
             useEffect(() => {
                 const currentTurn = history[currentSlideIndex];
                 if (prefs.autoPlay && mediaStatus.audio !== 'disabled' && currentSlideIndex === history.length - 1 && currentTurn?.type === 'ai' && currentTurn.audio && !isPlaying && playingTurnRef.current !== currentTurn) {
-                     handleSpeak(currentTurn);
+                      handleSpeak(currentTurn);
                 }
             }, [currentSlideIndex, history, prefs.autoPlay, mediaStatus.audio]);
 
@@ -516,8 +499,8 @@
             const callGemini = async (prompt, systemInstruction = "") => {
                 const attempts = [];
                 let data = null;
-                // Removed gemini-1.5-pro, prioritizing 2.0-flash-lite
-                const modelsToTry = ['gemini-2.0-flash-lite-preview-02-05', 'gemini-2.0-flash', 'gemini-1.5-flash'];
+                // FIX: Prioritize 2.0 Flash (standard) for better instruction following on Codex updates
+                const modelsToTry = ['gemini-2.0-flash', 'gemini-2.0-flash-lite-preview-02-05', 'gemini-1.5-flash'];
                 
                 for (const model of modelsToTry) {
                     const start = performance.now();
@@ -553,16 +536,18 @@
                 const fullPrompt = `Style: ${stylePrompt}. ${imagePrompt}`;
                 const attempts = [];
                 
+                // BACKUP MODE: Skip directly to Pollinations
                 if (mediaStatus.images === 'backup') {
                     try {
                         const start3 = performance.now();
                         const encodedPrompt = encodeURIComponent(fullPrompt);
                         const pollUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=576&nologo=true`;
                         
+                        // Preload to verify and time
                         await new Promise((resolve, reject) => {
                             const img = new Image();
                             img.onload = resolve;
-                            img.onerror = () => reject(new Error("Pollinations fetch failed")); 
+                            img.onerror = () => reject(new Error("Pollinations fetch failed")); // Reject on error to catch
                             img.src = pollUrl;
                         });
 
@@ -570,6 +555,9 @@
                         return { image: pollUrl, stats: attempts };
                     } catch (e) {
                         console.error("Backup generation failed", e);
+                        // If backup fails, maybe try one more time or just fail gracefully without disabling everything immediately unless repeated.
+                        // For now, let's keep it 'active' but return null so we can try again next turn? 
+                        // Or if we assume it's offline, disable. Let's not disable on one network blip.
                         attempts.push({ model: 'pollinations.ai', status: 'failed', duration: 0, error: e.message });
                         return { image: null, stats: attempts };
                     }
@@ -600,6 +588,7 @@
                     attempts.push({ model: 'imagen-4.0-generate-001', status: 'failed', duration: (performance.now() - start1) / 1000, error: e.message });
                     console.warn("Imagen failed, trying fallback...", e);
                     
+                    // Fallback to Gemini 2.0 Flash
                     const start2 = performance.now();
                     try {
                         const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
@@ -618,6 +607,10 @@
                         attempts.push({ model: 'gemini-2.0-flash', status: 'failed', duration: (performance.now() - start2) / 1000, error: e2.message });
                     }
 
+                    // Final Fallback to Pollinations (Free) if primary failed but not via quota 
+                    // (if quota, we threw error above and are in catch block of parent or next loop... wait, logic flow:
+                    // If Quota error -> Throw -> catch(e) -> enters here.
+                    // So we should try Pollinations here too as a last resort for THIS turn.
                     try {
                         const start3 = performance.now();
                         const encodedPrompt = encodeURIComponent(fullPrompt);
@@ -676,6 +669,7 @@
                     throw new Error("No audio data");
                 } catch (e) {
                     attempts.push({ model: modelToUse, status: 'failed', duration: (performance.now() - start) / 1000, error: e.message });
+                    // Explicitly log browser_tts success
                     attempts.push({ model: 'browser_tts', status: 'success', duration: 0 });
                     return { audio: 'browser_tts', stats: attempts };
                 }
@@ -849,25 +843,25 @@
             const getSystemPrompt = () => {
                 const settingVal = config.setting === 'custom' ? config.settingCustom : config.setting;
                 const styleVal = config.style === 'custom' ? config.styleCustom : config.style;
-                const pageCount = history.length + 1;
                 
-                return `
-                Role: Expert AI Game Master. 
-                Current State: Page ${pageCount}. Genre: ${settingVal}. Style: ${styleVal}.
-                Context: ${summary}. 
-                Codex: ${JSON.stringify(codex)}. 
+                return `ROLE: AI Game Master & Loremaster. 
+                GENRE: ${settingVal}
+                VISUAL STYLE: ${styleVal}
+                
+                CURRENT CONTEXT: ${summary}
+                EXISTING CODEX: ${JSON.stringify(codex)}
+                
+                TASK:
+                1. NARRATIVE: Write the next segment in SECOND PERSON ("You..."). The player IS the protagonist.
+                2. LORE SCANNING (CRITICAL): You must act as a database engine. Scan your new narrative for ANY proper names, significant locations, or unique items.
+                   - If a person/place/item is mentioned that is NOT in the EXISTING CODEX, you MUST add it.
+                   - If a known entity is mentioned with new details, you MUST update it.
+                   - Do not be lazy. If you introduce "Captain Kael", you MUST add him to the Codex immediately.
+                3. SUMMARY: concise log of this turn.
+                4. VISUALS: Describe the scene for the image generator. Do NOT use names in the image prompt (the painter doesn't know who "Kael" is). Use visual descriptions ("a scar-faced soldier").
 
-                CRITICAL STORYTELLING RULES:
-                1. PACING & MOMENTUM: You are on Page ${pageCount}. Drive the plot forward. Do not let the story stall.
-                2. ANTI-LOOPING: If the player returns to a previous location, CHANGE IT. Trigger an event, reveal a secret, or introduce an obstacle. Do NOT just describe the room again.
-                3. PROACTIVE NARRATION: If the player acts passively (e.g. "I look around"), trigger an event. Something must happen TO them.
-                4. ITEM UTILITY: Check the Codex/Inventory. If they have an item (key, map, tool), offer specific choices to USE it to solve problems.
-                5. CHOICES: Provide 4 distinct options. **DO NOT INCLUDE NUMBERS IN THE CHOICE TEXT (e.g. write "Go North", NOT "1. Go North").**
-                6. NO REPETITION: Never output the exact same text block twice.
-                
-                OUTPUT JSON format strictly: 
-                {"narrative": "text", "choices": ["Option A", "Option B", "Option C", "Option D"], "summary_update": "text", "image_prompt": "highly detailed visual description", "codex_updates": [{"category":"character|place|item","key":"Name","entry":"Trait"}]}
-                `;
+                OUTPUT JSON format:
+                {"narrative": "text", "choices": ["1","2","3","4"], "summary_update": "text", "image_prompt": "visual description", "codex_updates": [{"category":"character|place|item","key":"Name","entry":"New fact or description"}]}`;
             };
 
             const handleSpeak = async (turn) => {
