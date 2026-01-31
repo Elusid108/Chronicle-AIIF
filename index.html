@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Chronicle: Iterative Fiction Engine v1.0.1</title>
+    <title>Chronicle: Iterative Fiction Engine v1.0.3</title>
     
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
@@ -80,9 +80,24 @@
     <div id="root"></div>
 
     <script type="text/babel" data-type="module">
+        /*
+         * Copyright 2026 Christopher Moore
+         *
+         * Licensed under the Apache License, Version 2.0 (the "License");
+         * you may not use this file except in compliance with the License.
+         * You may obtain a copy of the License at
+         *
+         * http://www.apache.org/licenses/LICENSE-2.0
+         *
+         * Unless required by applicable law or agreed to in writing, software
+         * distributed under the License is distributed on an "AS IS" BASIS,
+         * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+         * See the License for the specific language governing permissions and
+         * limitations under the License.
+         */
         import React, { useState, useEffect, useRef } from 'react';
         import { createRoot } from 'react-dom/client';
-        const CHRONICLE_VERSION = '1.0.1';
+        const CHRONICLE_VERSION = '1.0.3';
         import { 
             Settings, 
             Book, 
@@ -436,11 +451,14 @@
             });
 
             const [initialContext, setInitialContext] = useState('');
+            const [hasSavedGame, setHasSavedGame] = useState(false);
+            const [savedPageCount, setSavedPageCount] = useState(0);
             const [activePanel, setActivePanel] = useState(null); 
 
             const [showExportModal, setShowExportModal] = useState(false);
             const [showExitConfirm, setShowExitConfirm] = useState(false);
-            const [showEndConfirm, setShowEndConfirm] = useState(false); 
+            const [showEndConfirm, setShowEndConfirm] = useState(false);
+            const [showNewConfirm, setShowNewConfirm] = useState(false); 
             const [exportDetails, setExportDetails] = useState({ title: 'The Unnamed Chronicle', author: 'Anonymous' });
 
             const [history, setHistory] = useState([]); 
@@ -481,6 +499,18 @@
                         setPrefs(prev => ({ ...prev, ...parsed }));
                     } catch(e) { console.error("Error loading prefs", e); }
                 }
+                try {
+                    const save = localStorage.getItem('chronicle_save');
+                    if (save) {
+                        const data = JSON.parse(save);
+                        if (data && Array.isArray(data.history) && data.history.length > 0) {
+                            setHasSavedGame(true);
+                            setSavedPageCount(data.history.filter(t => t.type === 'ai').length);
+                        }
+                    }
+                } catch (e) {
+                    localStorage.removeItem('chronicle_save');
+                }
             }, []);
 
             const handleKeySave = (key) => {
@@ -492,6 +522,22 @@
             useEffect(() => {
                 localStorage.setItem('chronicle_prefs', JSON.stringify(prefs));
             }, [prefs]);
+
+            useEffect(() => {
+                if (history.length === 0) return;
+                const historyForSave = history.map(t => ({ ...t, audio: null }));
+                const lastTurn = historyForSave[historyForSave.length - 1];
+                // #region agent log
+                fetch('http://127.0.0.1:7246/ingest/5ba1f1ca-6ba9-46c4-a278-67699f680b77',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.html:PersistEffect',message:'Persist effect running',data:{historyLen:historyForSave.length,lastTurnHasImage:!!(lastTurn&&lastTurn.image),view},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H3a'})}).catch(()=>{});
+                // #endregion
+                const payload = { version: 1, history: historyForSave, codex, summary, currentSlideIndex, isEnding, turnsRemaining, isFinished, exportDetails, config, initialContext };
+                try {
+                    localStorage.setItem('chronicle_save', JSON.stringify(payload));
+                } catch (e) {
+                    if (e.name === 'QuotaExceededError') console.warn('Chronicle: could not save progress, storage full');
+                    else console.warn('Chronicle: save failed', e);
+                }
+            }, [history, codex, summary, currentSlideIndex, isEnding, turnsRemaining, isFinished, exportDetails, config, initialContext]);
 
             useEffect(() => {
                 let animationFrame;
@@ -523,10 +569,10 @@
 
             useEffect(() => {
                 const currentTurn = history[currentSlideIndex];
-                if (prefs.autoPlay && mediaStatus.audio !== 'disabled' && currentSlideIndex === history.length - 1 && currentTurn?.type === 'ai' && currentTurn.audio && !isPlaying && playingTurnRef.current !== currentTurn) {
+                if (view === 'game' && prefs.autoPlay && mediaStatus.audio !== 'disabled' && currentSlideIndex === history.length - 1 && currentTurn?.type === 'ai' && currentTurn.audio && !isPlaying && playingTurnRef.current !== currentTurn) {
                       handleSpeak(currentTurn);
                 }
-            }, [currentSlideIndex, history, prefs.autoPlay, mediaStatus.audio]);
+            }, [view, currentSlideIndex, history, prefs.autoPlay, mediaStatus.audio]);
 
             useEffect(() => {
                 localStorage.setItem('chronicle_fav_voices', JSON.stringify(favorites));
@@ -582,25 +628,45 @@
             };
 
             const GENRE_PROMPTS = {
-                fantasy: "High fantasy: elves, dragons, magic, medieval kingdoms, quests, epic battles",
-                cyberpunk: "Cyberpunk: neon cities, megacorps, hackers, cybernetics, dystopian near-future",
-                noir: "Noir detective: 1940s detectives, femme fatales, rain-slicked streets, moral ambiguity",
-                scifi: "Space opera: starships, aliens, galactic empires, space exploration, epic scope",
-                lovecraft: "Eldritch horror: cosmic dread, unknowable entities, madness, forbidden knowledge",
-                postapoc: "Post-apocalyptic wasteland: ruins, survival, scavengers, harsh landscape",
-                steampunk: "Steampunk: Victorian era, steam power, brass gadgets, airships, clockwork",
-                weirdwest: "Weird West: American Old West + supernatural/horror: dusty towns, cowboys, saloons, monsters, weird phenomena"
+                fantasy: "High fantasy setting, medieval world, intricate magic systems, mythical creatures, dragons and elves, epic quests, ancient ruins, sword and sorcery, grand narrative scale, world-building focus",
+                cyberpunk: "Cyberpunk aesthetic, high-tech low-life, neon-drenched megacities, corporate dystopia, cybernetic enhancements, hackers and netrunners, rain-slicked chrome, synthetic transhumanism",
+                noir: "Noir detective atmosphere, 1940s style, hardboiled narrative, femme fatales, chiaroscuro lighting, moral ambiguity, cynical tone, smoke and shadows, jazz undertones, crime thriller",
+                scifi: "Space opera, galactic civilization, interstellar travel, advanced alien species, starship bridges, cosmic warfare, futuristic technology, dyson spheres, deep space exploration",
+                lovecraft: "Eldritch horror, cosmic dread, Lovecraftian mythos, forbidden tomes, sanity-blasting visions, tentacles and slime, 1920s New England setting, psychological terror, the unknowable",
+                postapoc: "Post-apocalyptic wasteland, scorched earth, survival of the fittest, scavenged technology, mutated flora and fauna, raiders and convoys, desolate beauty, resource scarcity, fallout aesthetics",
+                steampunk: "Steampunk alternate history, Victorian era aesthetics, brass and copper machinery, steam-powered automatons, airships and dirigibles, clockwork gears, goggles and top hats, industrial revolution vibe",
+                weirdwest: "Weird West, American frontier mixed with supernatural horror, dusty saloons, occult rituals, undead gunslingers, cryptids of the plains, folk horror, high noon duels with magic",
+                grimdark: "Grimdark fantasy, gritty realism, morally grey characters, brutal combat, low magic, war-torn lands, mud and blood, nihilistic tone, medieval politics, visceral description",
+                solarpunk: "Solarpunk, utopian future, nature and technology in harmony, art nouveau architecture, renewable energy, vertical gardens, optimistic tone, sustainable community, bright and verdant",
+                gothic_horror: "Gothic horror, haunted mansions, Victorian dress, creeping fog, candlelight, family curses, romance and terror, crumbling architecture, storm-swept moors, psychological unease",
+                urban_fantasy: "Urban fantasy, modern day setting with hidden magic, secret societies, supernatural creatures in subways, masquerade, street-level wizardry, police procedural with spells, neon noir",
+                regency: "Regency era romance, Bridgerton style, high society, ballroom dances, intricate etiquette, courtships and scandals, pastel aesthetics, aristocracy, wit and banter",
+                xianxia: "Xianxia cultivation, Chinese mythology, martial arts, flying swords, seeking immortality, qi energy, heavenly realms, ancient sects, spiritual beasts, eastern fantasy",
+                space_western: "Space Western, frontier planets, bounty hunters in space, rusty spaceships, galactic outlaws, dusty spaceports, analog technology, harmonica soundtracks, lived-in universe",
+                litrpg: "LitRPG, game mechanics in real life, leveling up, dungeon crawling, status screens, loot drops, MMORPG logic, guild politics, raid bosses, isekai elements",
+                espionage: "Cold War espionage, spy thriller, gadgets and tradecraft, global conspiracy, undercover operations, interrogation rooms, microfilm and dead drops, political intrigue, high stakes poker",
+                zombie: "Zombie apocalypse, outbreak survival, shambling hordes, boarded up safehouses, resource management, trust no one, urban decay, biological horror, pandemic scenario"
             };
 
             const STYLE_PROMPTS = {
-                oil_painting: "traditional oil painting on canvas, visible brushstrokes, impasto texture, rich painterly quality, classical fine art style, museum-quality",
-                watercolor: "watercolor painting, soft washes, paper texture, delicate brushwork, traditional illustration",
-                pixel_art: "8-bit pixel art, retro game aesthetic, crisp pixel grid, limited color palette",
-                cinematic: "cinematic still, film photography, dramatic lighting, high production value",
-                comic: "comic book art, bold outlines, vibrant colors, graphic novel style",
-                blueprint: "technical blueprint, blue and white, technical drawing, schematic style",
-                ukiyoe: "Japanese ukiyo-e woodblock print, flat colors, bold outlines, traditional Edo period",
-                synthwave: "synthwave aesthetic, neon lights, 80s retro futurism, vaporwave"
+                oil_painting: "Traditional oil painting on canvas, heavy impasto texture, visible brushstrokes, classical composition, museum-quality fine art, dramatic lighting, rich color depth, old master style",
+                watercolor: "Watercolor painting, wet-on-wet technique, rough paper texture, bleeding edges, soft pastel washes, artistic abstraction, delicate ink lines, dreamlike atmosphere",
+                pixel_art: "16-bit pixel art, high-definition sprite work, SNES era aesthetic, dithering, limited color palette, isometric view, crisp edges, retro gaming nostalgia",
+                cinematic: "Cinematic film still, anamorphic lens, 35mm photography, high dynamic range, dramatic lighting, depth of field, bokeh, color graded, blockbuster movie aesthetic, raytracing",
+                comic: "Modern comic book art, bold black ink outlines, ben-day dots, cel-shaded, dynamic action poses, vibrant CMYK colors, graphic novel aesthetic, sharp contrast",
+                blueprint: "Technical blueprint schematic, cyanotype blue background, white technical lines, grid overlay, cross-section views, architectural notation, engineering diagram style",
+                ukiyoe: "Japanese Ukiyo-e woodblock print, washi paper texture, flat perspective, bold outlines, traditional Edo period aesthetic, muted organic colors, Hokusai style",
+                synthwave: "Synthwave aesthetic, retro-futurism, neon purples and cyans, laser grids, VHS glitch effects, 1980s CGI style, chrome reflections, outrun visual style",
+                anime_90s: "1990s anime aesthetic, hand-drawn cel animation, vintage grain, muted retro colors, detailed mechanical designs, dramatic angles, Ghost in the Shell style",
+                low_poly: "Low poly 3D render, PlayStation 1 graphics, sharp geometric shapes, flat shading, nostalgic 3D, minimalist topology, glitch art elements, early computer graphics",
+                claymation: "Stop-motion claymation, Aardman style, plasticine texture, thumbprints visible, miniature photography, tilt-shift effect, handmade dioramas, soft studio lighting",
+                ink_wash: "Sumi-e ink wash painting, black and white, sweeping brush strokes, negative space, minimalist composition, rice paper texture, zen aesthetic, charcoal sketch elements",
+                art_nouveau: "Art Nouveau, Alphonse Mucha style, intricate floral borders, stained glass aesthetic, flowing hair and fabric, gold leaf accents, decorative elegance, pastel palette",
+                papercraft: "Papercraft illustration, layered paper cutouts, drop shadows for depth, collage style, textured cardstock, vibrant colors, storybook aesthetic, handmade feel",
+                concept_art: "Digital concept art, speedpaint style, loose brushwork, atmospheric perspective, rule of thirds, video game environment art, epic scale, matte painting",
+                vhs_horror: "Found footage aesthetic, VHS tape distortion, tracking errors, low resolution, night vision green, grainy ISO, camcorder overlay, analog horror vibe",
+                risograph: "Risograph print, misaligned color layers, halftone dot patterns, limited ink colors, rough paper texture, zine aesthetic, retro printmaking style",
+                liminal: "Liminal space photography, kenopsia, eerie empty places, fluorescent lighting, surreal mundane settings, infinite hallways, dreamcore, unsettlingly familiar"
             };
 
             const generateImage = async (imagePrompt) => {
@@ -759,6 +825,9 @@
             };
 
             const resetGame = () => {
+                localStorage.removeItem('chronicle_save');
+                setHasSavedGame(false);
+                setSavedPageCount(0);
                 setHistory([]);
                 setCodex({ characters: {}, places: {}, items: {} });
                 setCurrentSlideIndex(0);
@@ -780,6 +849,51 @@
             const confirmExit = () => {
                 if (history.length > 0 && !isFinished) setShowExitConfirm(true);
                 else { resetGame(); setView('setup'); }
+            };
+
+            const resumeSavedGame = () => {
+                try {
+                    const save = localStorage.getItem('chronicle_save');
+                    if (!save) return;
+                    const data = JSON.parse(save);
+                    if (!data || !Array.isArray(data.history) || data.history.length === 0) return;
+                    // #region agent log
+                    const lastTurn = data.history[data.history.length - 1];
+                    fetch('http://127.0.0.1:7246/ingest/5ba1f1ca-6ba9-46c4-a278-67699f680b77',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.html:ResumeRestore',message:'Resume restoring post-fix',data:{historyLen:data.history.length,lastTurnHasImage:!!(lastTurn&&lastTurn.image)},timestamp:Date.now(),sessionId:'debug-session',runId:'post-fix',hypothesisId:'H3b'})}).catch(()=>{});
+                    // #endregion
+                    const defaultConfig = { setting: 'cyberpunk', settingCustom: '', style: 'pixel_art', styleCustom: '', mode: 'choice', narrativeModel: 'speed', audioModel: 'pro' };
+                    const defaultCodex = { characters: {}, places: {}, items: {} };
+                    setHistory(data.history);
+                    setCodex(data.codex && typeof data.codex === 'object' ? data.codex : defaultCodex);
+                    setSummary(data.summary != null ? data.summary : "The story has just begun.");
+                    setCurrentSlideIndex(typeof data.currentSlideIndex === 'number' ? data.currentSlideIndex : data.history.length - 1);
+                    setIsEnding(Boolean(data.isEnding));
+                    setTurnsRemaining(data.turnsRemaining != null ? data.turnsRemaining : null);
+                    setIsFinished(Boolean(data.isFinished));
+                    setExportDetails(data.exportDetails && typeof data.exportDetails === 'object' ? data.exportDetails : { title: 'The Unnamed Chronicle', author: 'Anonymous' });
+                    setConfig(data.config && typeof data.config === 'object' ? { ...defaultConfig, ...data.config } : defaultConfig);
+                    setInitialContext(typeof data.initialContext === 'string' ? data.initialContext : '');
+                    setView('game');
+                    data.history.forEach((turn, idx) => {
+                        if (turn.type === 'ai' && turn.image_prompt && !turn.image) {
+                            generateImage(turn.image_prompt).then(imageResult => {
+                                if (imageResult.image) {
+                                    setHistory(prev => {
+                                        const updated = [...prev];
+                                        if (updated[idx] && updated[idx].narrative === turn.narrative) {
+                                            updated[idx] = { ...updated[idx], image: imageResult.image };
+                                        }
+                                        return updated;
+                                    });
+                                }
+                            });
+                        }
+                    });
+                } catch (e) {
+                    console.error('Resume failed', e);
+                    localStorage.removeItem('chronicle_save');
+                    setHasSavedGame(false);
+                }
             };
 
             const updateCodexState = (updates, currentTurnIndex) => {
@@ -872,6 +986,9 @@
 
                     if (fetchImage) {
                         generateImage(turnData.image_prompt).then(imageResult => {
+                            // #region agent log
+                            fetch('http://127.0.0.1:7246/ingest/5ba1f1ca-6ba9-46c4-a278-67699f680b77',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.html:ImageLoaded',message:'Image loaded, updating history',data:{hasImage:!!imageResult.image},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H3a'})}).catch(()=>{});
+                            // #endregion
                             setHistory(prev => {
                                 const updated = [...prev];
                                 const index = updated.length - 1;
@@ -914,6 +1031,9 @@
             };
 
             const startGame = () => {
+                localStorage.removeItem('chronicle_save');
+                setHasSavedGame(false);
+                setSavedPageCount(0);
                 const settingVal = config.setting === 'custom' ? config.settingCustom : config.setting;
                 const styleVal = config.style === 'custom' ? config.styleCustom : config.style;
                 const genreText = GENRE_PROMPTS[settingVal] || settingVal;
@@ -936,13 +1056,13 @@
                 EXISTING CODEX: ${JSON.stringify(codex)}
                 
                 TASK:
-                1. NARRATIVE: Write the next segment in SECOND PERSON ("You..."). The player IS the protagonist. The narrative must NOT include the numbered choice list. Put each full, descriptive choice phrase ONLY in the choices array. The narrative ends with the setup question (e.g. "Do you head towards:")—the actual options go in choices.
+                1. NARRATIVE: Write the next segment in SECOND PERSON ("You..."). The player IS the protagonist. The narrative must NOT include the numbered choice list. Put each full, descriptive choice phrase ONLY in the choices array. You MUST provide exactly 4 choices in the choices array—distinct, full phrases—every turn. The narrative ends with the setup question (e.g. "What do you do?" or "Do you:")—the actual options go in choices.
                 2. LORE SCANNING (CRITICAL): You must act as a database engine. You MUST add codex_updates for EVERY named character, location, or significant item in your narrative. Never return an empty codex_updates when you introduce new entities. Use category "character", "place", or "item". Scan for ANY proper names, significant locations, or unique items. If a person/place/item is mentioned that is NOT in the EXISTING CODEX, you MUST add it. If a known entity is mentioned with new details, you MUST update it. Do not be lazy. If you introduce "Captain Kael", you MUST add him to the Codex immediately.
                 3. SUMMARY: concise log of this turn.
                 4. VISUALS: Describe the scene for the image generator in the chosen visual style. Do NOT use names in the image prompt (the painter doesn't know who "Kael" is). Use visual descriptions ("a scar-faced soldier").
 
-                OUTPUT JSON format:
-                {"narrative": "text", "choices": ["Head towards The Bridge", "Go to Engineering", "Report to Armory Delta", "Make for Medical Bay"], "summary_update": "text", "image_prompt": "visual description", "codex_updates": [{"category":"character|place|item","key":"Name","entry":"New fact or description"}]}`;
+                OUTPUT JSON format (choices array must have exactly 4 strings):
+                {"narrative": "text", "choices": ["Explore the ruins", "Search the market", "Talk to the stranger", "Rest at the campfire"], "summary_update": "text", "image_prompt": "visual description", "codex_updates": [{"category":"character|place|item","key":"Name","entry":"New fact or description"}]}`;
             };
 
             const handleSpeak = async (turn) => {
@@ -1034,7 +1154,7 @@
                                 <div className="flex flex-col gap-2">
                                     <label className="text-xs uppercase tracking-wider text-gray-500 font-bold">Genre</label>
                                     <div className="max-h-[200px] overflow-y-auto custom-scrollbar flex flex-col gap-2 pr-1">
-                                        {[{ value: 'fantasy', label: 'High Fantasy' }, { value: 'cyberpunk', label: 'Cyberpunk' }, { value: 'noir', label: 'Noir Detective' }, { value: 'scifi', label: 'Space Opera' }, { value: 'lovecraft', label: 'Eldritch Horror' }, { value: 'postapoc', label: 'Wasteland' }, { value: 'steampunk', label: 'Steampunk' }, { value: 'weirdwest', label: 'Weird West' }].map((opt) => (
+                                        {[{ value: 'fantasy', label: 'High Fantasy' }, { value: 'cyberpunk', label: 'Cyberpunk' }, { value: 'noir', label: 'Noir Detective' }, { value: 'scifi', label: 'Space Opera' }, { value: 'lovecraft', label: 'Eldritch Horror' }, { value: 'postapoc', label: 'Wasteland' }, { value: 'steampunk', label: 'Steampunk' }, { value: 'weirdwest', label: 'Weird West' }, { value: 'grimdark', label: 'Grimdark' }, { value: 'solarpunk', label: 'Solarpunk' }, { value: 'gothic_horror', label: 'Gothic Horror' }, { value: 'urban_fantasy', label: 'Urban Fantasy' }, { value: 'regency', label: 'Regency Romance' }, { value: 'xianxia', label: 'Xianxia/Cultivation' }, { value: 'space_western', label: 'Space Western' }, { value: 'litrpg', label: 'LitRPG' }, { value: 'espionage', label: 'Cold War Spy' }, { value: 'zombie', label: 'Zombie Outbreak' }].map((opt) => (
                                             <button key={opt.value} onClick={() => setConfig({...config, setting: opt.value})} className={`p-2 rounded-lg text-xs text-left transition-all border shrink-0 ${config.setting === opt.value ? 'bg-blue-900/20 border-blue-500 text-blue-200 shadow-[0_0_15px_rgba(59,130,246,0.15)]' : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700'}`}><div className="font-semibold">{opt.label}</div></button>
                                         ))}
                                         <button onClick={() => setConfig({...config, setting: 'custom'})} className={`p-2 rounded-lg text-xs text-left transition-all border shrink-0 ${config.setting === 'custom' ? 'bg-blue-900/20 border-blue-500 text-blue-200 shadow-[0_0_15px_rgba(59,130,246,0.15)]' : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700'}`}><div className="font-semibold">Custom...</div></button>
@@ -1043,7 +1163,7 @@
                                 <div className="flex flex-col gap-2">
                                     <label className="text-xs uppercase tracking-wider text-gray-500 font-bold">Visual Style</label>
                                     <div className="max-h-[200px] overflow-y-auto custom-scrollbar flex flex-col gap-2 pr-1">
-                                        {[{ value: 'cinematic', label: 'Cinematic' }, { value: 'pixel_art', label: 'Pixel Art' }, { value: 'watercolor', label: 'Watercolor' }, { value: 'comic', label: 'Graphic Novel' }, { value: 'oil_painting', label: 'Oil Painting' }, { value: 'blueprint', label: 'Blueprint' }, { value: 'ukiyoe', label: 'Ukiyo-e Print' }, { value: 'synthwave', label: 'Synthwave' }].map((opt) => (
+                                        {[{ value: 'oil_painting', label: 'Oil Painting' }, { value: 'watercolor', label: 'Watercolor' }, { value: 'pixel_art', label: 'Pixel Art' }, { value: 'cinematic', label: 'Cinematic' }, { value: 'comic', label: 'Comic Book' }, { value: 'blueprint', label: 'Blueprint' }, { value: 'ukiyoe', label: 'Ukiyo-e Print' }, { value: 'synthwave', label: 'Synthwave' }, { value: 'anime_90s', label: '90s Anime' }, { value: 'low_poly', label: 'Low Poly 3D' }, { value: 'claymation', label: 'Claymation' }, { value: 'ink_wash', label: 'Ink Wash' }, { value: 'art_nouveau', label: 'Art Nouveau' }, { value: 'papercraft', label: 'Papercraft' }, { value: 'concept_art', label: 'Concept Art' }, { value: 'vhs_horror', label: 'VHS Horror' }, { value: 'risograph', label: 'Risograph' }, { value: 'liminal', label: 'Liminal Space' }].map((opt) => (
                                             <button key={opt.value} onClick={() => setConfig({...config, style: opt.value})} className={`p-2 rounded-lg text-xs text-left transition-all border shrink-0 ${config.style === opt.value ? 'bg-blue-900/20 border-blue-500 text-blue-200 shadow-[0_0_15px_rgba(59,130,246,0.15)]' : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700'}`}><div className="font-semibold">{opt.label}</div></button>
                                         ))}
                                         <button onClick={() => setConfig({...config, style: 'custom'})} className={`p-2 rounded-lg text-xs text-left transition-all border shrink-0 ${config.style === 'custom' ? 'bg-blue-900/20 border-blue-500 text-blue-200 shadow-[0_0_15px_rgba(59,130,246,0.15)]' : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700'}`}><div className="font-semibold">Custom...</div></button>
@@ -1066,9 +1186,11 @@
                             </div>
                             <div className="mb-6"><label className="text-xs uppercase tracking-wider text-gray-500 font-bold mb-2 block font-sans">Initial Context (Optional)</label><textarea value={initialContext} onChange={(e) => setInitialContext(e.target.value)} placeholder="Waking up in a derelict cryopod..." className="w-full bg-gray-950 border border-gray-800 rounded-lg p-3 text-sm text-gray-300 focus:outline-none focus:border-blue-500 resize-none h-24 font-serif"/></div>
                             {status && <div className="mb-4 p-3 bg-blue-900/20 border border-blue-500/30 rounded flex items-center gap-2 text-xs text-blue-300 font-mono"><Activity size={14} className="animate-pulse"/> {status}</div>}
-                            <Button onClick={startGame} className="w-full py-4 text-lg mt-6" disabled={loading}>{loading ? "Initializing..." : "Begin Simulation"}</Button>
+                            {hasSavedGame && <Button onClick={resumeSavedGame} variant="secondary" className="w-full py-3 text-base mt-4 flex items-center justify-center gap-2" disabled={loading}><BookOpen size={18} /> Resume your story ({savedPageCount} {savedPageCount === 1 ? 'page' : 'pages'})</Button>}
+                            <Button onClick={() => hasSavedGame ? setShowNewConfirm(true) : startGame()} className="w-full py-4 text-lg mt-6" disabled={loading}>{loading ? "Initializing..." : (hasSavedGame ? "New Simulation" : "Begin Simulation")}</Button>
                         </div>
                         {activePanel === 'settings' && renderSettings()}
+                        {showNewConfirm && <div className="absolute inset-0 bg-black/90 flex items-center justify-center z-50 p-6"><div className="w-full max-w-sm bg-gray-900 border border-red-900/50 rounded-xl p-6 text-center"><AlertTriangle size={32} className="text-red-500 mx-auto mb-4"/><h3 className="text-lg font-bold text-white mb-2">Start New Simulation?</h3><p className="text-gray-400 text-sm mb-6">Your current story will be lost.</p><div className="flex gap-3 justify-center"><Button onClick={() => setShowNewConfirm(false)} variant="secondary">Cancel</Button><Button onClick={() => { setShowNewConfirm(false); startGame(); }} variant="danger">Start New</Button></div></div></div>}
                     </div>
                 );
             }
@@ -1131,7 +1253,16 @@
                     
                     <div className="flex-1 flex flex-col h-full relative z-10 bg-black min-w-0">
                         <div className="h-12 border-b border-gray-800 bg-gray-950 flex items-center justify-between px-4 shrink-0 z-20 relative">
-                            <div className="flex items-center gap-4"><div className="text-gray-500 text-xs font-bold tracking-widest uppercase truncate max-w-[100px] md:max-w-none">{config.setting === 'custom' ? config.settingCustom : config.setting}</div><button onClick={confirmExit} className="text-gray-500 hover:text-white p-1" title="Exit"><Home size={16} /></button></div>
+                            <div className="flex items-center gap-4"><div className="text-gray-500 text-xs font-bold tracking-widest uppercase truncate max-w-[100px] md:max-w-none">{config.setting === 'custom' ? config.settingCustom : config.setting}</div><button onClick={() => {
+                                // #region agent log
+                                const pageCount = history.filter(t => t.type === 'ai').length;
+                                const lastTurn = history[history.length - 1];
+                                fetch('http://127.0.0.1:7246/ingest/5ba1f1ca-6ba9-46c4-a278-67699f680b77',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.html:HomeClick',message:'Home clicked post-fix',data:{historyLen:history.length,pageCount,savedPageCountBefore:pageCount},timestamp:Date.now(),sessionId:'debug-session',runId:'post-fix',hypothesisId:'H1'})}).catch(()=>{});
+                                // #endregion
+                                stopAudio();
+                                setSavedPageCount(pageCount);
+                                setView('setup');
+                            }} className="text-gray-500 hover:text-white p-1" title="Home"><Home size={16} /></button></div>
                             <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-xs text-gray-500 uppercase tracking-widest font-bold hidden md:block font-sans">Page {currentSlideIndex + 1} of {history.length || 1}</div>
                             <div className="flex gap-2 items-center">
                                 {!isEnding && !isFinished && history.length > 0 && <button onClick={initiateEnding} className="text-xs bg-red-900/30 text-red-400 border border-red-900/50 px-3 py-1 rounded hover:bg-red-900/50 flex items-center gap-2 mr-2"><Flag size={12}/> End</button>}
@@ -1207,7 +1338,7 @@
                         <div className="shrink-0 bg-black border-t border-gray-900 p-4 md:p-6 z-20 relative"><div className="max-w-3xl mx-auto w-full">
                             {isLatestSlide && !loading && !isFinished && currentTurnData?.type === 'ai' && (
                                 <div className="animate-in fade-in slide-in-from-bottom-2">
-                                {config.mode === 'choice' && currentTurnData?.choices?.length > 0 && <div className="grid grid-cols-2 gap-3">{currentTurnData.choices.slice(0,4).map((choice, i) => <button key={i} onClick={() => handleTurn(choice)} className={`p-4 text-center bg-gray-900 hover:bg-gray-800 border border-gray-800 hover:border-blue-500/50 rounded-lg text-gray-300 transition-all group h-full flex items-center justify-center font-sans ${prefs.uiSize}`}><span className="font-bold text-blue-500 mr-2">{i + 1}.</span> {choice}</button>)}</div>}
+                                {config.mode === 'choice' && currentTurnData?.choices?.length > 0 && (() => { const raw = (currentTurnData.choices || []).slice(0, 4); const padded = raw.length >= 4 ? raw : [...raw, ...Array(4 - raw.length).fill("Do something else.")]; return <div className="grid grid-cols-2 gap-3">{padded.map((choice, i) => <button key={i} onClick={() => handleTurn(choice)} className={`p-4 text-center bg-gray-900 hover:bg-gray-800 border border-gray-800 hover:border-blue-500/50 rounded-lg text-gray-300 transition-all group h-full flex items-center justify-center font-sans ${prefs.uiSize}`}><span className="font-bold text-blue-500 mr-2">{i + 1}.</span> {choice}</button>)}</div>; })()}
                                 {((config.mode === 'choice' && !currentTurnData?.choices?.length) || config.mode === 'text') && <div className="flex gap-2"><Input value={userInput} onChange={(e) => setUserInput(e.target.value)} placeholder="What do you do next?" onKeyDown={(e) => e.key === 'Enter' && userInput && handleTurn(userInput)} disabled={loading} /><Button onClick={() => handleTurn(userInput)} disabled={!userInput || loading} className="shrink-0"><Send size={14} /></Button></div>}
                             </div>)}
                             
