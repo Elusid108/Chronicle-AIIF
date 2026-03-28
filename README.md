@@ -1,66 +1,21 @@
 # Chronicle: Iterative Fiction Engine
+> A serverless, AI-driven interactive fiction engine that generates cohesive narratives, dynamic scene illustrations, and fully voiced dialogue in real time.
 
-AI-powered interactive fiction that generates narrative, images, and audio in real time. A single-page app built to run on GitHub Pages.
+## Overview
+Chronicle is a single-page interactive storytelling application that dynamically generates immersive choose-your-own-adventure experiences. Operating entirely within the browser, it leverages advanced generative AI models to construct branching narratives based on user input, genre selections, and visual style preferences. As the story unfolds, the engine automatically extracts lore to build a dynamic codex, generates corresponding scene artwork, and synthesizes character voices, ensuring a persistent and highly personalized narrative journey.
 
-## Features
+## Key Features
+* **Multi-Modal Generation:** Delivers endless, responsive text-based adventures accompanied by real-time generated imagery and text-to-speech narration.
+* **Dynamic Story Workflow:** Users begin in a setup interface to define the genre and premise, then navigate through a dynamic story view equipped with a live codex, performance summary, and branching narrative choices, culminating in a printable book export.
+* **Zero-Backend Architecture:** Utilizes a serverless design that orchestrates multi-modal AI generation—narrative text, image synthesis, and audio TTS—directly from the client using the Google Gemini and Imagen APIs.
 
-- **Genre selection** – 18 genres (High Fantasy, Cyberpunk, Noir, Space Opera, Eldritch Horror, Wasteland, Steampunk, Weird West, Grimdark, Solarpunk, Gothic Horror, Urban Fantasy, Regency Romance, Xianxia/Cultivation, Space Western, LitRPG, Cold War Spy, Zombie Outbreak), or custom
-- **Visual style** – 18 styles (Oil Painting, Watercolor, Pixel Art, Cinematic, Comic Book, Blueprint, Ukiyo-e, Synthwave, 90s Anime, Low Poly 3D, Claymation, Ink Wash, Art Nouveau, Papercraft, Concept Art, VHS Horror, Risograph, Liminal Space), or custom
-- **Initial context** – Optional premise or setup to shape your story
-- **AI-generated narrative** – Choice-based or free-form text progression; always four options in choice mode
-- **Scene images** – Imagen, Gemini, or Pollinations fallback
-- **TTS narration** – Gemini TTS or browser fallback
-- **Codex** – Tracks characters, places, and items across the story
-- **Export** – Print or save as a book-style document
-- **Story persistence** – Resume your story after closing the browser or returning later
-- **Home navigation** – Home button returns to setup without losing progress; page count shown for saved games
-- **Auto-play** – Narration only auto-plays when viewing the story (not on setup); audio continues loading in the background
+## Technical Architecture
+* **Frontend/UI:** React 18, Tailwind CSS, Lucide Icons
+* **Backend/Logic:** In-browser JavaScript, Google Gemini API, Google Imagen API, Pollinations API
+* **Infrastructure/Hardware:** Static HTML Hosting, Browser LocalStorage API
 
-## Requirements
-
-- A [Google Gemini API key](https://aistudio.google.com/app/apikey)
-- A modern browser with JavaScript enabled
-
-Your API key is stored locally in your browser and is only sent to Google’s APIs.
-
-## Run Locally
-
-Serve `index.html` with any static server, for example:
-
-```bash
-python -m http.server 8000
-```
-
-Then open `http://localhost:8000` in your browser.
-
-Or use VS Code Live Server or similar.
-
-## Deploy to GitHub Pages
-
-1. Push this repo to GitHub
-2. Open **Settings** → **Pages**
-3. Set **Source** to your main branch (e.g. `main`)
-4. Use root or `/docs` as the folder
-5. Save; the site will be available at `https://<username>.github.io/<repo>/`
-
-## Tech Stack
-
-- React (esm.sh)
-- Tailwind CSS (CDN)
-- Babel Standalone (in-browser JSX)
-- Google Gemini API (narrative, images, TTS)
-
-## Version
-
-v1.0.3
-
-## License & Attribution
-
-This project is licensed under the **Apache License 2.0**.
-
-### Giving Credit
-
-I put a lot of work into my open-source projects! If you use this code in your own project, please provide attribution by:
-
-1. Keeping the `NOTICE` file intact in your repository.
-2. Linking back to [chrismooredesigns.com](https://chrismooredesigns.com) or my [GitHub profile](https://github.com/Elusid108) if the project is displayed publicly.
+## Setup & Deployment
+1. Clone the repository to your local machine.
+2. Serve the `index.html` file using any static HTTP server (e.g., `python -m http.server 8000`).
+3. Open the application in a modern web browser and input a valid Google Gemini API key when prompted to authorize the simulation.
+4. Alternatively, deploy directly to GitHub Pages by pushing the repository and enabling static hosting from the main branch.
