@@ -429,8 +429,6 @@
                 style: 'pixel_art',
                 styleCustom: '',
                 mode: 'choice',
-                narrativeModel: 'speed',
-                audioModel: 'pro'
             });
             const [prefs, setPrefs] = useState({
                 narrativeSize: 'text-lg', 
@@ -445,6 +443,15 @@
                 images: 'active', // active, backup, disabled
                 audio: 'active'   // active, backup, disabled
             });
+
+            // Model Selection State
+            const [availableModels, setAvailableModels] = useState({ text: [], image: [], audio: [] });
+            const [modelPrefs, setModelPrefs] = useState({
+                textModel: '',
+                imageModel: '',
+                audioModel: '',
+            });
+            const [modelListLoading, setModelListLoading] = useState(false);
 
             const [favorites, setFavorites] = useState(() => {
                 try { return JSON.parse(localStorage.getItem('chronicle_fav_voices') || '[]'); } catch { return []; }
@@ -499,6 +506,12 @@
                         setPrefs(prev => ({ ...prev, ...parsed }));
                     } catch(e) { console.error("Error loading prefs", e); }
                 }
+                const savedModelPrefs = localStorage.getItem('chronicle_model_prefs');
+                if (savedModelPrefs) {
+                    try {
+                        setModelPrefs(prev => ({ ...prev, ...JSON.parse(savedModelPrefs) }));
+                    } catch(e) { console.error("Error loading model prefs", e); }
+                }
                 try {
                     const save = localStorage.getItem('chronicle_save');
                     if (save) {
@@ -522,6 +535,16 @@
             useEffect(() => {
                 localStorage.setItem('chronicle_prefs', JSON.stringify(prefs));
             }, [prefs]);
+
+            useEffect(() => {
+                localStorage.setItem('chronicle_model_prefs', JSON.stringify(modelPrefs));
+            }, [modelPrefs]);
+
+            useEffect(() => {
+                if (apiKey && availableModels.text.length === 0) {
+                    fetchAvailableModels();
+                }
+            }, [apiKey]);
 
             useEffect(() => {
                 if (history.length === 0) return;
@@ -592,13 +615,68 @@
                 setActivePanel(current => current === panelName ? null : panelName);
             };
 
+            // --- MODEL DISCOVERY ---
+
+            const GEMINI_IMAGE_CAPABLE = ['gemini-2.0-flash', 'gemini-2.0-flash-001', 'gemini-2.0-flash-exp'];
+            const MODEL_EXCLUDE_PATTERNS = ['embedding', 'aqa', 'veo', 'chirp', 'code-gecko', 'bison', 'gecko'];
+
+            const fetchAvailableModels = async () => {
+                if (!apiKey) return;
+                setModelListLoading(true);
+                try {
+                    let allModels = [];
+                    let pageToken = '';
+                    do {
+                        const tokenParam = pageToken ? `&pageToken=${pageToken}` : '';
+                        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}&pageSize=1000${tokenParam}`);
+                        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                        const data = await res.json();
+                        if (data.models) allModels = allModels.concat(data.models);
+                        pageToken = data.nextPageToken || '';
+                    } while (pageToken);
+
+                    const text = [];
+                    const image = [];
+                    const audio = [];
+
+                    for (const model of allModels) {
+                        const name = (model.name || '').replace('models/', '');
+                        const display = model.displayName || name;
+                        const methods = model.supportedGenerationMethods || [];
+
+                        if (MODEL_EXCLUDE_PATTERNS.some(p => name.includes(p))) continue;
+
+                        if (methods.includes('predict') && name.includes('imagen')) {
+                            image.push({ id: name, displayName: display });
+                        } else if (methods.includes('generateContent') && name.includes('gemini')) {
+                            if (name.includes('tts')) {
+                                audio.push({ id: name, displayName: display });
+                            } else {
+                                text.push({ id: name, displayName: display });
+                                if (GEMINI_IMAGE_CAPABLE.some(g => name === g || name.startsWith(g))) {
+                                    image.push({ id: name, displayName: `${display} (native)` });
+                                }
+                            }
+                        }
+                    }
+
+                    setAvailableModels({ text, image, audio });
+                } catch (e) {
+                    console.error("Failed to fetch models:", e);
+                } finally {
+                    setModelListLoading(false);
+                }
+            };
+
             // --- API LOGIC ---
 
             const callGemini = async (prompt, systemInstruction = "") => {
                 const attempts = [];
                 let data = null;
-                // FIX: Prioritize 2.0 Flash (standard) for better instruction following on Codex updates
-                const modelsToTry = ['gemini-2.0-flash', 'gemini-2.0-flash-lite-preview-02-05', 'gemini-1.5-flash'];
+                const defaultModels = ['gemini-2.0-flash', 'gemini-2.0-flash-lite-preview-02-05', 'gemini-1.5-flash'];
+                const modelsToTry = modelPrefs.textModel
+                    ? [modelPrefs.textModel, ...defaultModels.filter(m => m !== modelPrefs.textModel)]
+                    : defaultModels;
                 
                 for (const model of modelsToTry) {
                     const start = performance.now();
@@ -704,71 +782,78 @@
                     }
                 }
 
-                // PRIMARY MODE: Try Google Models
-                const start1 = performance.now();
-                try {
-                    setStatus("Visuals: imagen-4.0...");
-                    const url = `https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-generate-001:predict?key=${apiKey}`;
-                    const payload = { instances: [{ prompt: fullPrompt }], parameters: { sampleCount: 1, aspectRatio: "16:9" } };
-                    const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-                    
-                    if (response.status === 429 || response.status === 403) {
-                        setMediaStatus(prev => ({ ...prev, images: 'backup' }));
-                        throw new Error("Quota/Permission Limit");
-                    }
-
-                    if (response.ok) {
-                        const data = await response.json();
-                        if (data.predictions?.[0]?.bytesBase64Encoded) {
-                            attempts.push({ model: 'imagen-4.0-generate-001', status: 'success', duration: (performance.now() - start1) / 1000 });
-                            return { image: `data:image/png;base64,${data.predictions[0].bytesBase64Encoded}`, stats: attempts };
-                        }
-                    }
-                    throw new Error(`Imagen API Error: ${response.status}`);
-                } catch (e) { 
-                    attempts.push({ model: 'imagen-4.0-generate-001', status: 'failed', duration: (performance.now() - start1) / 1000, error: e.message });
-                    console.warn("Imagen failed, trying fallback...", e);
-                    
-                    // Fallback to Gemini 2.0 Flash
-                    const start2 = performance.now();
+                // Helper: try an image model by name with correct endpoint detection
+                const tryImageModel = async (modelId) => {
+                    const start = performance.now();
+                    const isImagen = modelId.includes('imagen');
+                    setStatus(`Visuals: ${modelId}...`);
                     try {
-                        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
-                        const payload = { contents: [{ parts: [{ text: fullPrompt }] }], generationConfig: { responseModalities: ["IMAGE"] } };
-                        const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-
-                        if (response.ok) {
+                        if (isImagen) {
+                            const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:predict?key=${apiKey}`;
+                            const payload = { instances: [{ prompt: fullPrompt }], parameters: { sampleCount: 1, aspectRatio: "16:9" } };
+                            const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                            if (response.status === 429 || response.status === 403) {
+                                setMediaStatus(prev => ({ ...prev, images: 'backup' }));
+                                throw new Error("Quota/Permission Limit");
+                            }
+                            if (!response.ok) throw new Error(`Status ${response.status}`);
+                            const data = await response.json();
+                            if (data.predictions?.[0]?.bytesBase64Encoded) {
+                                attempts.push({ model: modelId, status: 'success', duration: (performance.now() - start) / 1000 });
+                                return `data:image/png;base64,${data.predictions[0].bytesBase64Encoded}`;
+                            }
+                            throw new Error("No image data in response");
+                        } else {
+                            const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${apiKey}`;
+                            const payload = { contents: [{ parts: [{ text: fullPrompt }] }], generationConfig: { responseModalities: ["IMAGE"] } };
+                            const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                            if (response.status === 429 || response.status === 403) {
+                                setMediaStatus(prev => ({ ...prev, images: 'backup' }));
+                                throw new Error("Quota/Permission Limit");
+                            }
+                            if (!response.ok) throw new Error(`Status ${response.status}`);
                             const data = await response.json();
                             const part = data.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
                             if (part) {
-                                attempts.push({ model: 'gemini-2.0-flash', status: 'success', duration: (performance.now() - start2) / 1000 });
-                                return { image: `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`, stats: attempts };
+                                attempts.push({ model: modelId, status: 'success', duration: (performance.now() - start) / 1000 });
+                                return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
                             }
+                            throw new Error("No image data in response");
                         }
-                    } catch (e2) {
-                        attempts.push({ model: 'gemini-2.0-flash', status: 'failed', duration: (performance.now() - start2) / 1000, error: e2.message });
+                    } catch (e) {
+                        attempts.push({ model: modelId, status: 'failed', duration: (performance.now() - start) / 1000, error: e.message });
+                        console.warn(`Image model ${modelId} failed:`, e);
+                        return null;
                     }
+                };
 
-                    // Final Fallback to Pollinations (Free) if primary failed but not via quota 
-                    // (if quota, we threw error above and are in catch block of parent or next loop... wait, logic flow:
-                    // If Quota error -> Throw -> catch(e) -> enters here.
-                    // So we should try Pollinations here too as a last resort for THIS turn.
-                    try {
-                        const start3 = performance.now();
-                        const encodedPrompt = encodeURIComponent(fullPrompt);
-                        const pollUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=576&nologo=true`;
-                        
-                        await new Promise((resolve, reject) => {
-                            const img = new Image();
-                            img.onload = resolve;
-                            img.onerror = () => reject(new Error("Pollinations fetch failed"));
-                            img.src = pollUrl;
-                        });
+                // PRIMARY MODE: Try user-selected model first, then defaults
+                const imageModelsToTry = modelPrefs.imageModel
+                    ? [modelPrefs.imageModel, 'imagen-4.0-generate-001', 'gemini-2.0-flash'].filter((m, i, a) => a.indexOf(m) === i)
+                    : ['imagen-4.0-generate-001', 'gemini-2.0-flash'];
 
-                        attempts.push({ model: 'pollinations.ai', status: 'success', duration: (performance.now() - start3) / 1000 });
-                        return { image: pollUrl, stats: attempts };
-                    } catch (e3) {
-                        attempts.push({ model: 'pollinations.ai', status: 'failed', duration: 0, error: e3.message });
-                    }
+                for (const modelId of imageModelsToTry) {
+                    const result = await tryImageModel(modelId);
+                    if (result) return { image: result, stats: attempts };
+                }
+
+                // Final Fallback to Pollinations (Free)
+                try {
+                    const start3 = performance.now();
+                    const encodedPrompt = encodeURIComponent(fullPrompt);
+                    const pollUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=576&nologo=true`;
+                    
+                    await new Promise((resolve, reject) => {
+                        const img = new Image();
+                        img.onload = resolve;
+                        img.onerror = () => reject(new Error("Pollinations fetch failed"));
+                        img.src = pollUrl;
+                    });
+
+                    attempts.push({ model: 'pollinations.ai', status: 'success', duration: (performance.now() - start3) / 1000 });
+                    return { image: pollUrl, stats: attempts };
+                } catch (e3) {
+                    attempts.push({ model: 'pollinations.ai', status: 'failed', duration: 0, error: e3.message });
                 }
                 return { image: null, stats: attempts };
             };
@@ -782,7 +867,7 @@
 
                 const attempts = [];
                 const currentVoice = voiceOverride || prefs.voice;
-                const modelToUse = 'gemini-2.5-flash-preview-tts';
+                const modelToUse = modelPrefs.audioModel || 'gemini-2.5-flash-preview-tts';
                 const start = performance.now();
 
                 try {
@@ -1218,6 +1303,43 @@
                                     {mediaStatus.audio === 'disabled' && <span className="text-red-400">• Audio Disabled</span>}
                                 </div>
                             )}
+
+                            <div>
+                                <label className="text-[10px] text-blue-400 font-bold block mb-2 font-sans">AI MODELS</label>
+                                <div className="flex items-center justify-between bg-black border border-gray-800 rounded p-2 mb-3">
+                                    <span className="text-gray-500 text-[10px]">
+                                        {availableModels.text.length || availableModels.image.length || availableModels.audio.length
+                                            ? `${availableModels.text.length} text, ${availableModels.image.length} image, ${availableModels.audio.length} audio`
+                                            : 'No models loaded'}
+                                    </span>
+                                    <button onClick={fetchAvailableModels} disabled={modelListLoading} className="text-blue-400 text-[10px] hover:text-blue-300 flex items-center gap-1 disabled:opacity-50">
+                                        <RefreshCw size={10} className={modelListLoading ? 'animate-spin' : ''}/> {modelListLoading ? 'Loading...' : 'Refresh'}
+                                    </button>
+                                </div>
+                                <div className="space-y-3">
+                                    <div>
+                                        <label className="text-[9px] text-gray-400 uppercase block mb-1">Text Generation</label>
+                                        <select value={modelPrefs.textModel} onChange={e => setModelPrefs(p => ({...p, textModel: e.target.value}))} className="w-full bg-black border border-gray-700 rounded p-2 text-xs text-gray-300 focus:border-blue-500 outline-none">
+                                            <option value="">Auto (recommended)</option>
+                                            {availableModels.text.map(m => <option key={m.id} value={m.id}>{m.displayName}</option>)}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="text-[9px] text-gray-400 uppercase block mb-1">Image Generation</label>
+                                        <select value={modelPrefs.imageModel} onChange={e => setModelPrefs(p => ({...p, imageModel: e.target.value}))} className="w-full bg-black border border-gray-700 rounded p-2 text-xs text-gray-300 focus:border-blue-500 outline-none">
+                                            <option value="">Auto (recommended)</option>
+                                            {availableModels.image.map(m => <option key={m.id} value={m.id}>{m.displayName}</option>)}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="text-[9px] text-gray-400 uppercase block mb-1">Audio / TTS</label>
+                                        <select value={modelPrefs.audioModel} onChange={e => setModelPrefs(p => ({...p, audioModel: e.target.value}))} className="w-full bg-black border border-gray-700 rounded p-2 text-xs text-gray-300 focus:border-blue-500 outline-none">
+                                            <option value="">Auto (recommended)</option>
+                                            {availableModels.audio.map(m => <option key={m.id} value={m.id}>{m.displayName}</option>)}
+                                        </select>
+                                    </div>
+                                </div>
+                            </div>
 
                             <div><label className="text-[10px] text-blue-400 font-bold block mb-2 font-sans">MODE</label><div className="flex gap-1">{['choice', 'text'].map(m => <button key={m} onClick={() => setConfig({...config, mode: m})} className={`flex-1 p-2 text-[10px] border rounded uppercase ${config.mode === m ? 'bg-blue-900 border-blue-500 text-white' : 'border-gray-700 text-gray-500'}`}>{m}</button>)}</div></div>
                             
