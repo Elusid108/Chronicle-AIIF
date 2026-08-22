@@ -22,6 +22,10 @@ root.render(html`<${App} />`);
 
 if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
-        navigator.serviceWorker.register(new URL('../sw.js', import.meta.url)).catch(() => {});
+        navigator.serviceWorker.getRegistrations()
+            .then((regs) => Promise.all(regs.map((r) => r.unregister())))
+            .then(() => caches.keys())
+            .then((keys) => Promise.all(keys.map((k) => caches.delete(k))))
+            .catch(() => {});
     });
 }

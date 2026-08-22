@@ -10,7 +10,7 @@ export function Button({ children, onClick, variant = 'primary', className = '',
         danger: 'bg-red-900/50 hover:bg-red-900 text-red-200 border border-red-800',
     };
     return html`
-        <button onClick=${onClick} disabled=${disabled} className=${`${baseStyle} ${variants[variant]} ${className}`} title=${title}>
+        <button type="button" onClick=${onClick} disabled=${disabled} className=${`${baseStyle} ${variants[variant]} ${className}`} title=${title}>
             ${children}
         </button>
     `;

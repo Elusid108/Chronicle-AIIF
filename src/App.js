@@ -87,6 +87,7 @@ export function App() {
     const toastTimer = useRef(null);
     const abortRef = useRef(null);
     const snapshotRef = useRef({});
+    const saveWriteId = useRef(0);
 
     const touchStart = useRef(null);
     const touchEnd = useRef(null);
@@ -95,7 +96,7 @@ export function App() {
 
     snapshotRef.current = {
         history, codex, summary, stats, scene, styleCard, config, initialContext,
-        prefs, isEnding, turnsRemaining, mediaStatus, apiKey, modelPrefs,
+        prefs, isEnding, turnsRemaining, isFinished, mediaStatus, apiKey, modelPrefs,
     };
 
     const showToast = (type, message) => {
@@ -130,10 +131,11 @@ export function App() {
 
     useEffect(() => {
         if (history.length === 0) return;
+        const writeId = ++saveWriteId.current;
         let cancelled = false;
         (async () => {
             await initStorage();
-            if (cancelled) return;
+            if (cancelled || writeId !== saveWriteId.current) return;
             writeActiveSave({
                 history, codex, summary, scene, styleCard, currentSlideIndex, isEnding, turnsRemaining,
                 isFinished, exportDetails, config, initialContext, stats,
@@ -295,8 +297,22 @@ export function App() {
     const startGame = async () => {
         abortActiveTurn(abortRef);
         revokeHistoryImages(history);
+        saveWriteId.current += 1;
         await initStorage();
         await clearActiveSave();
+        const resetSnap = {
+            ...snapshotRef.current,
+            history: [],
+            codex: { ...DEFAULT_CODEX },
+            summary: { ...EMPTY_SUMMARY },
+            stats: {},
+            scene: { ...EMPTY_SCENE },
+            styleCard: '',
+            isEnding: false,
+            turnsRemaining: null,
+            isFinished: false,
+        };
+        snapshotRef.current = resetSnap;
         setHasSavedGame(false);
         setSavedPageCount(0);
         setHistory([]);
@@ -307,6 +323,7 @@ export function App() {
         setStats({});
         setCurrentSlideIndex(0);
         setIsEnding(false); setTurnsRemaining(null); setIsFinished(false);
+        setExportDetails({ title: 'The Unnamed Chronicle', author: 'Anonymous' });
         runTurn('initial', buildInitialPrompt(config, initialContext), {
             history: [], codex: { ...DEFAULT_CODEX }, summary: { ...EMPTY_SUMMARY }, stats: {}, scene: { ...EMPTY_SCENE },
         });
@@ -379,9 +396,6 @@ export function App() {
     const initiateEnding = () => setShowEndConfirm(true);
     const confirmEndingSequence = () => {
         const remaining = Math.max(1, Number(prefs.endingLength) || 5);
-        // #region agent log
-        fetch('http://127.0.0.1:7332/ingest/448c3e2d-77b0-4a98-ab42-11af332cc836',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7f2b38'},body:JSON.stringify({sessionId:'7f2b38',location:'src/App.js:confirmEndingSequence',message:'confirm-ending',data:{endingLength:remaining,histLen:history.length,autoStart:true},hypothesisId:'C',timestamp:Date.now(),runId:'post-fix'})}).catch(()=>{});
-        // #endregion
         snapshotRef.current = { ...snapshotRef.current, isEnding: true, turnsRemaining: remaining };
         setShowEndConfirm(false);
         setIsEnding(true);

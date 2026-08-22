@@ -147,11 +147,7 @@ const parseModelJson = (text) => {
     }
     if (start === -1) throw new SyntaxError('Invalid model JSON');
     const repaired = repairTruncatedJson(raw.slice(start));
-    const parsed = JSON.parse(repaired);
-    // #region agent log
-    fetch('http://127.0.0.1:7332/ingest/448c3e2d-77b0-4a98-ab42-11af332cc836',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7f2b38'},body:JSON.stringify({sessionId:'7f2b38',location:'src/api/gemini.js:parseModelJson',message:'json-repaired',data:{rawLen:raw.length,repairedLen:repaired.length,hasNarrative:!!(parsed&&parsed.narrative)},hypothesisId:'A',timestamp:Date.now(),runId:'post-fix'})}).catch(()=>{});
-    // #endregion
-    return parsed;
+    return JSON.parse(repaired);
 };
 
 const repairTruncatedJson = (s) => {
@@ -202,8 +198,6 @@ const streamGenerate = async (apiKey, model, payload, { onPartialText, signal } 
     const decoder = new TextDecoder();
     let sseBuffer = '';
     let fullText = '';
-    let finishReason = '';
-    let promptFeedback = '';
 
     const flushEvent = (chunk) => {
         const lines = chunk.split(/\r?\n/);
@@ -214,8 +208,6 @@ const streamGenerate = async (apiKey, model, payload, { onPartialText, signal } 
             if (!jsonStr || jsonStr === '[DONE]') continue;
             try {
                 const obj = JSON.parse(jsonStr);
-                if (obj.candidates?.[0]?.finishReason) finishReason = String(obj.candidates[0].finishReason);
-                if (obj.promptFeedback?.blockReason) promptFeedback = String(obj.promptFeedback.blockReason);
                 const part = obj.candidates?.[0]?.content?.parts?.[0]?.text;
                 if (part) {
                     fullText += part;
@@ -237,9 +229,6 @@ const streamGenerate = async (apiKey, model, payload, { onPartialText, signal } 
         for (const ev of events) flushEvent(ev);
     }
     if (sseBuffer.trim()) flushEvent(sseBuffer);
-    // #region agent log
-    fetch('http://127.0.0.1:7332/ingest/448c3e2d-77b0-4a98-ab42-11af332cc836',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7f2b38'},body:JSON.stringify({sessionId:'7f2b38',location:'src/api/gemini.js:streamGenerate',message:'stream-end',data:{model,fullTextLen:fullText.length,finishReason,promptFeedback,endsWithBrace:/\}\s*$/.test(fullText),hasNarrative:fullText.indexOf('"narrative"')!==-1},hypothesisId:'A',timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
     return fullText;
 };
 
@@ -255,9 +244,6 @@ export const callGemini = async (deps, prompt, systemInstruction = '', opts = {}
     let data = null;
 
     const modelsToTry = collectTextModels(modelPrefs, availableTextModels);
-    // #region agent log
-    fetch('http://127.0.0.1:7332/ingest/448c3e2d-77b0-4a98-ab42-11af332cc836',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7f2b38'},body:JSON.stringify({sessionId:'7f2b38',location:'src/api/gemini.js:callGemini',message:'callGemini-start',data:{modelsToTry,stream:!!stream,sysLen:String(systemInstruction||'').length,promptLen:String(prompt||'').length},hypothesisId:'A',timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
 
     for (const model of modelsToTry) {
         const start = performance.now();
@@ -286,9 +272,6 @@ export const callGemini = async (deps, prompt, systemInstruction = '', opts = {}
             }
             if (!data?.narrative) throw new Error('Invalid model JSON');
             attempts.push({ model, status: 'success', duration: (performance.now() - start) / 1000 });
-            // #region agent log
-            fetch('http://127.0.0.1:7332/ingest/448c3e2d-77b0-4a98-ab42-11af332cc836',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7f2b38'},body:JSON.stringify({sessionId:'7f2b38',location:'src/api/gemini.js:callGemini',message:'callGemini-ok',data:{model,narrativeLen:data&&data.narrative?String(data.narrative).length:0,choiceCount:Array.isArray(data&&data.choices)?data.choices.length:-1},hypothesisId:'A',timestamp:Date.now()})}).catch(()=>{});
-            // #endregion
             break;
         } catch (e) {
             if (isAbortError(e)) throw e;
@@ -296,11 +279,9 @@ export const callGemini = async (deps, prompt, systemInstruction = '', opts = {}
                 throw new Error('API key rejected (401/403)');
             }
             attempts.push({ model, status: 'failed', duration: (performance.now() - start) / 1000, error: e.message });
-            const canFailover = e instanceof GeminiHttpError && e.status !== 400;
-            // #region agent log
-            fetch('http://127.0.0.1:7332/ingest/448c3e2d-77b0-4a98-ab42-11af332cc836',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7f2b38'},body:JSON.stringify({sessionId:'7f2b38',location:'src/api/gemini.js:callGemini',message:'callGemini-fail',data:{model,status:e&&e.status||0,msg:String(e&&e.message||e).slice(0,240),canFailover},hypothesisId:'A',timestamp:Date.now(),runId:'post-fix'})}).catch(()=>{});
-            // #endregion
+            const canFailover = !(e instanceof GeminiHttpError && (e.status === 401 || e.status === 403));
             if (!canFailover) throw e;
+            if (onPartialText) onPartialText('');
             console.warn(`Model ${model} failed. Trying next...`, e.message);
         }
     }
