@@ -1,0 +1,57 @@
+{"sessionId":"471988","location":"index.html","message":"html-inline-start","data":{"href":"file:///C:/Users/tech1/OneDrive/Documents/GitHub/Chronicle-AIIF/index.html","readyState":"loading","swController":false},"hypothesisId":"D","timestamp":1787356919197}
+{"sessionId":"471988","location":"index.html","message":"main.js-http-fail","data":{"err":"TypeError: Failed to fetch"},"hypothesisId":"A","timestamp":1787356919203}
+{"sessionId":"471988","location":"index.html","message":"html-inline-start","data":{"href":"http://localhost:8000/","readyState":"loading","swController":false},"hypothesisId":"D","timestamp":1787357123212}
+{"sessionId":"471988","location":"index.html","message":"main.js-http","data":{"status":200,"contentType":"text/javascript"},"hypothesisId":"A","timestamp":1787357123219}
+{"sessionId":"471988","location":"index.html","message":"window.error","data":{"msg":"Uncaught SyntaxError: Unexpected token '}'","filename":"http://localhost:8000/src/components/Panels.js","lineno":92,"colno":48,"stack":"SyntaxError: Unexpected token '}'"},"hypothesisId":"B","timestamp":1787357123322}
+{"sessionId":"471988","location":"index.html","message":"root-after-2s","data":{"childCount":0,"htmlLen":0},"hypothesisId":"E","timestamp":1787357125214}
+{"sessionId":"471988","location":"index.html","message":"html-inline-start","data":{"href":"http://localhost:8000/","readyState":"loading","swController":false},"hypothesisId":"D","timestamp":1787357138866}
+{"sessionId":"471988","location":"index.html","message":"main.js-http","data":{"status":200,"contentType":"text/javascript"},"hypothesisId":"A","timestamp":1787357138873}
+{"sessionId":"471988","location":"index.html","message":"window.error","data":{"msg":"Uncaught SyntaxError: Unexpected token '}'","filename":"http://localhost:8000/src/components/Panels.js","lineno":92,"colno":48,"stack":"SyntaxError: Unexpected token '}'"},"hypothesisId":"B","timestamp":1787357138876}
+{"sessionId":"471988","location":"index.html","message":"root-after-2s","data":{"childCount":0,"htmlLen":0},"hypothesisId":"E","timestamp":1787357140867}
+{"sessionId":"471988","location":"index.html","message":"html-inline-start","data":{"href":"http://localhost:8000/","readyState":"loading","swController":false},"hypothesisId":"D","timestamp":1787357356422}
+{"sessionId":"471988","location":"index.html","message":"main.js-http","data":{"status":200,"contentType":"text/javascript"},"hypothesisId":"A","timestamp":1787357356430}
+{"sessionId":"471988","location":"index.html","message":"window.error","data":{"msg":"Uncaught SyntaxError: Unexpected token '}'","filename":"http://localhost:8000/src/components/Panels.js","lineno":92,"colno":47,"stack":"SyntaxError: Unexpected token '}'"},"hypothesisId":"B","timestamp":1787357356634}
+{"sessionId":"471988","location":"index.html","message":"root-after-2s","data":{"childCount":0,"htmlLen":0},"hypothesisId":"E","timestamp":1787357358424}
+{"sessionId":"471988","location":"index.html","message":"html-inline-start","data":{"href":"http://localhost:8000/","readyState":"loading","swController":false},"hypothesisId":"D","timestamp":1787357368225}
+{"sessionId":"471988","location":"index.html","message":"main.js-http","data":{"status":200,"contentType":"text/javascript"},"hypothesisId":"A","timestamp":1787357368242}
+{"sessionId":"471988","location":"index.html","message":"window.error","data":{"msg":"Uncaught SyntaxError: Unexpected token '}'","filename":"http://localhost:8000/src/components/Panels.js","lineno":92,"colno":47,"stack":"SyntaxError: Unexpected token '}'"},"hypothesisId":"B","timestamp":1787357368303}
+{"sessionId":"471988","location":"index.html","message":"root-after-2s","data":{"childCount":0,"htmlLen":0},"hypothesisId":"E","timestamp":1787357370228}
+{"sessionId":"471988","location":"index.html","message":"html-inline-start","data":{"href":"http://localhost:8000/","readyState":"loading","swController":false},"hypothesisId":"D","timestamp":1787357374570}
+{"sessionId":"471988","location":"index.html","message":"main.js-http","data":{"status":200,"contentType":"text/javascript"},"hypothesisId":"A","timestamp":1787357374580}
+{"sessionId":"471988","location":"index.html","message":"window.error","data":{"msg":"Uncaught SyntaxError: Unexpected token '}'","filename":"http://localhost:8000/src/components/Panels.js","lineno":92,"colno":47,"stack":"SyntaxError: Unexpected token '}'"},"hypothesisId":"B","timestamp":1787357374740}
+{"sessionId":"471988","location":"index.html","message":"root-after-2s","data":{"childCount":0,"htmlLen":0},"hypothesisId":"E","timestamp":1787357376572}
+{"sessionId":"471988","location":"index.html","message":"html-inline-start","data":{"href":"http://localhost:8000/","readyState":"loading","swController":false},"hypothesisId":"D","timestamp":1787357884955}
+{"sessionId":"471988","location":"src/main.js:render","message":"main.js-render-called","data":{"ok":true},"hypothesisId":"C","timestamp":1787357885187}
+{"sessionId":"471988","location":"src/App.js:App","message":"App-enter","data":{"emptySummaryType":"object","emptySceneType":"object"},"hypothesisId":"C","timestamp":1787357885192}
+{"sessionId":"471988","location":"src/App.js:return","message":"App-return-apikey","data":{"view":"setup","contextChars":2070},"hypothesisId":"E","timestamp":1787357885196}
+{"sessionId":"471988","location":"src/App.js:App","message":"App-enter","data":{"emptySummaryType":"object","emptySceneType":"object"},"hypothesisId":"C","timestamp":1787357885286}
+{"sessionId":"471988","location":"src/App.js:return","message":"App-return-apikey","data":{"view":"setup","contextChars":2070},"hypothesisId":"E","timestamp":1787357885287}
+{"sessionId":"471988","location":"src/App.js:App","message":"App-enter","data":{"emptySummaryType":"object","emptySceneType":"object"},"hypothesisId":"C","timestamp":1787357885328}
+{"sessionId":"471988","location":"src/App.js:return","message":"App-return-apikey","data":{"view":"setup","contextChars":2070},"hypothesisId":"E","timestamp":1787357885329}
+{"sessionId":"471988","location":"index.html","message":"root-after-2s","data":{"childCount":1,"htmlLen":2587},"hypothesisId":"E","timestamp":1787357886957}
+{"sessionId":"471988","location":"index.html","message":"html-inline-start","data":{"href":"http://localhost:8000/","readyState":"loading","swController":true},"hypothesisId":"D","timestamp":1787357895359}
+{"sessionId":"471988","location":"src/main.js:render","message":"main.js-render-called","data":{"ok":true},"hypothesisId":"C","timestamp":1787357895506}
+{"sessionId":"471988","location":"src/App.js:App","message":"App-enter","data":{"emptySummaryType":"object","emptySceneType":"object"},"hypothesisId":"C","timestamp":1787357895513}
+{"sessionId":"471988","location":"src/App.js:return","message":"App-return-apikey","data":{"view":"setup","contextChars":2070},"hypothesisId":"E","timestamp":1787357895517}
+{"sessionId":"471988","location":"src/App.js:App","message":"App-enter","data":{"emptySummaryType":"object","emptySceneType":"object"},"hypothesisId":"C","timestamp":1787357895620}
+{"sessionId":"471988","location":"src/App.js:return","message":"App-return-apikey","data":{"view":"setup","contextChars":2070},"hypothesisId":"E","timestamp":1787357895621}
+{"sessionId":"471988","location":"src/App.js:App","message":"App-enter","data":{"emptySummaryType":"object","emptySceneType":"object"},"hypothesisId":"C","timestamp":1787357895699}
+{"sessionId":"471988","location":"src/App.js:return","message":"App-return-apikey","data":{"view":"setup","contextChars":2070},"hypothesisId":"E","timestamp":1787357895700}
+{"sessionId":"471988","location":"index.html","message":"root-after-2s","data":{"childCount":1,"htmlLen":2587},"hypothesisId":"E","timestamp":1787357897361}
+{"sessionId":"471988","location":"src/App.js:App","message":"App-enter","data":{"emptySummaryType":"object","emptySceneType":"object"},"hypothesisId":"C","timestamp":1787357921896}
+{"sessionId":"471988","location":"src/App.js:App","message":"App-enter","data":{"emptySummaryType":"object","emptySceneType":"object"},"hypothesisId":"C","timestamp":1787357921954}
+{"sessionId":"471988","location":"src/App.js:App","message":"App-enter","data":{"emptySummaryType":"object","emptySceneType":"object"},"hypothesisId":"C","timestamp":1787357922188}
+{"sessionId":"471988","location":"src/App.js:App","message":"App-enter","data":{"emptySummaryType":"object","emptySceneType":"object"},"hypothesisId":"C","timestamp":1787357942862}
+{"sessionId":"471988","location":"src/App.js:App","message":"App-enter","data":{"emptySummaryType":"object","emptySceneType":"object"},"hypothesisId":"C","timestamp":1787357944448}
+{"sessionId":"471988","location":"src/App.js:App","message":"App-enter","data":{"emptySummaryType":"object","emptySceneType":"object"},"hypothesisId":"C","timestamp":1787357947814}
+{"sessionId":"471988","location":"src/App.js:App","message":"App-enter","data":{"emptySummaryType":"object","emptySceneType":"object"},"hypothesisId":"C","timestamp":1787357948045}
+{"sessionId":"471988","location":"src/App.js:App","message":"App-enter","data":{"emptySummaryType":"object","emptySceneType":"object"},"hypothesisId":"C","timestamp":1787357948279}
+{"sessionId":"471988","location":"src/App.js:App","message":"App-enter","data":{"emptySummaryType":"object","emptySceneType":"object"},"hypothesisId":"C","timestamp":1787357948534}
+{"sessionId":"471988","location":"src/App.js:App","message":"App-enter","data":{"emptySummaryType":"object","emptySceneType":"object"},"hypothesisId":"C","timestamp":1787357952034}
+{"sessionId":"471988","location":"src/App.js:App","message":"App-enter","data":{"emptySummaryType":"object","emptySceneType":"object"},"hypothesisId":"C","timestamp":1787393425289}
+{"sessionId":"471988","location":"src/App.js:App","message":"App-enter","data":{"emptySummaryType":"object","emptySceneType":"object"},"hypothesisId":"C","timestamp":1787393460255}
+{"sessionId":"471988","location":"src/App.js:App","message":"App-enter","data":{"emptySummaryType":"object","emptySceneType":"object"},"hypothesisId":"C","timestamp":1787393462051}
+{"sessionId":"471988","location":"src/App.js:App","message":"App-enter","data":{"emptySummaryType":"object","emptySceneType":"object"},"hypothesisId":"C","timestamp":1787393462382}
+{"sessionId":"471988","location":"src/App.js:App","message":"App-enter","data":{"emptySummaryType":"object","emptySceneType":"object"},"hypothesisId":"C","timestamp":1787393462551}
+{"sessionId":"471988","location":"src/App.js:App","message":"App-enter","data":{"emptySummaryType":"object","emptySceneType":"object"},"hypothesisId":"C","timestamp":1787393462813}
+{"sessionId":"471988","location":"src/App.js:App","message":"App-enter","data":{"emptySummaryType":"object","emptySceneType":"object"},"hypothesisId":"C","timestamp":1787393466315}

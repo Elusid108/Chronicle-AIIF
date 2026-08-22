@@ -1,0 +1,155 @@
+import { GENRE_PROMPTS, STYLE_PROMPTS, EMPTY_SCENE } from '../constants.js';
+import { normalizeSummary } from '../utils/storage.js';
+import { selectRelevantCodex, recentNarratives } from './memory.js';
+
+// Structured-output schema. narrative is ordered first so it streams earliest.
+export const TURN_SCHEMA = {
+    type: 'object',
+    properties: {
+        narrative: { type: 'string' },
+        choices: { type: 'array', items: { type: 'string' }, maxItems: 4 },
+        summary_update: { type: 'string' },
+        image_prompt: { type: 'string' },
+        scene: {
+            type: 'object',
+            properties: {
+                location: { type: 'string' },
+                time_of_day: { type: 'string' },
+                present_characters: { type: 'array', items: { type: 'string' } },
+                goal: { type: 'string' },
+                open_threads: { type: 'array', items: { type: 'string' } },
+            },
+        },
+        codex_updates: {
+            type: 'array',
+            items: {
+                type: 'object',
+                properties: {
+                    category: { type: 'string', enum: ['character', 'place', 'item'] },
+                    key: { type: 'string' },
+                    entry: { type: 'string' },
+                    aliases: { type: 'array', items: { type: 'string' } },
+                    status: { type: 'string' },
+                    location: { type: 'string' },
+                },
+                required: ['category', 'key', 'entry'],
+            },
+        },
+        state_updates: {
+            type: 'array',
+            items: {
+                type: 'object',
+                properties: { key: { type: 'string' }, value: { type: 'string' } },
+                required: ['key', 'value'],
+            },
+        },
+    },
+    required: ['narrative', 'choices', 'summary_update', 'image_prompt', 'codex_updates', 'scene'],
+    propertyOrdering: ['narrative', 'choices', 'summary_update', 'image_prompt', 'scene', 'codex_updates', 'state_updates'],
+};
+
+const resolveText = (value, custom, map) => {
+    const key = value === 'custom' ? custom : value;
+    return map[key] || key;
+};
+
+export const genreText = (config) => resolveText(config.setting, config.settingCustom, GENRE_PROMPTS);
+export const styleText = (config) => resolveText(config.style, config.styleCustom, STYLE_PROMPTS);
+
+const choiceTask = (mode) => {
+    if (mode === 'text') {
+        return `2. CHOICES: Optional. You MAY return up to 4 short suggested actions in the choices array; the player types freely. On a final conclusion turn, return an empty array.`;
+    }
+    return `2. CHOICES: Provide exactly 4 distinct, full-phrase choices in the choices array every turn (unless this is a final conclusion turn, then return an empty array).`;
+};
+
+// Assemble the system prompt. Context is layered: current scene (always),
+// a folded long-term summary, recent beats, a style card and/or last prose,
+// and only the most relevant (plus pinned) codex entries.
+export const buildSystemPrompt = ({
+    config, initialContext, summary, codex, history, statsEnabled, stats, scene, styleCard,
+}) => {
+    const genre = genreText(config);
+    const style = styleText(config);
+    const norm = normalizeSummary(summary);
+    const currentScene = scene && typeof scene === 'object' ? scene : EMPTY_SCENE;
+
+    const lastAction = (() => {
+        for (let i = history.length - 1; i >= 0; i--) {
+            if (history[i]?.userActionPreceding) return history[i].userActionPreceding;
+        }
+        return '';
+    })();
+    const recentBeatsText = norm.beats.slice(-14).join('\n') || '(none yet)';
+    const recentText = `${recentBeatsText}\n${lastAction}\n${currentScene.location || ''}\n${(currentScene.present_characters || []).join(' ')}`;
+    const { codex: relevantCodex, omitted } = selectRelevantCodex(codex, recentText, currentScene, 24);
+    const proseCount = styleCard ? 1 : 2;
+    const recent = recentNarratives(history, proseCount);
+
+    const sections = [
+        `ROLE: AI Game Master & Loremaster.`,
+        `GENRE: ${genre}`,
+        `VISUAL STYLE: ${style}. Describe scenes so the image generator can match this aesthetic.`,
+        `PLAYER REQUEST: ${initialContext || '(None)'}. The story MUST honor this premise and tone.`,
+    ];
+
+    if (styleCard) sections.push(`VOICE / STYLE CARD:\n${styleCard}`);
+
+    sections.push(`CURRENT SCENE (authoritative; keep this consistent unless the action changes it):\n${JSON.stringify(currentScene)}`);
+
+    if (norm.longTerm) sections.push(`STORY SO FAR (compressed history):\n${norm.longTerm}`);
+    sections.push(`RECENT EVENTS (running log):\n${recentBeatsText}`);
+
+    if (recent.length) {
+        sections.push(
+            `PREVIOUS PROSE (continue this exact voice, tone, and tense; do not repeat it):\n` +
+            recent.map((n, i) => `[${i === recent.length - 1 ? 'most recent' : 'earlier'}]\n${n}`).join('\n---\n')
+        );
+    }
+
+    sections.push(
+        `RELEVANT CODEX${omitted ? ` (showing most relevant; ${omitted} more on record)` : ''}:\n` +
+        JSON.stringify(relevantCodex)
+    );
+
+    if (statsEnabled && stats && Object.keys(stats).length) {
+        sections.push(`PLAYER STATE (current values, update via state_updates when they change):\n${JSON.stringify(stats)}`);
+    }
+
+    const extra = [
+        `6. SCENE: Fill scene with the player's current location, time of day, who is present, the immediate goal, and open_threads (unresolved promises).`,
+        `7. CODEX FIELDS: For each update you may set aliases, status (alive/dead/unknown/etc.), and location. Use category "character", "place", or "item".`,
+    ];
+    if (statsEnabled) extra.push(`8. STATE: When the player's tracked stats change (health, resources, etc.), reflect it in state_updates as key/value pairs.`);
+
+    sections.push(
+`TASK:
+1. NARRATIVE: Write the next segment in SECOND PERSON ("You..."). The player IS the protagonist. Maintain continuity with PREVIOUS PROSE. The narrative must NOT include the numbered choice list. The narrative ends with a setup question (e.g. "What do you do?").
+${choiceTask(config.mode)}
+3. LORE SCANNING (CRITICAL): Act as a database engine. Add codex_updates for EVERY named character, location, or significant item in your narrative. If an entity is new, add it; if a known entity gains new detail, update it. Do not be lazy.
+4. SUMMARY: summary_update is a concise one-to-two sentence log of what happened THIS turn only.
+5. VISUALS: image_prompt describes the scene for the image generator in the chosen visual style. Do NOT use proper names (the painter does not know who "Kael" is); use visual descriptions ("a scar-faced soldier").
+${extra.join('\n')}`
+    );
+
+    return sections.join('\n\n');
+};
+
+export const endingInstruction = (turnsRemaining, mode = 'choice') => {
+    if (turnsRemaining > 1) {
+        const choiceLine = mode === 'text'
+            ? 'Suggested choices are optional.'
+            : 'Still provide 4 choices.';
+        return `\n\nCRITICAL: ENDING SEQUENCE. ${turnsRemaining} turns left. ${choiceLine} Begin steering toward a satisfying conclusion. Write a LONGER response.`;
+    }
+    return `\n\nCRITICAL: FINAL TURN. Deliver a satisfying conclusion. Return an empty choices array. Write a long, conclusive response.`;
+};
+
+export const buildInitialPrompt = (config, initialContext) =>
+    `Start the story. Genre: ${genreText(config)}. Visual style: ${styleText(config)}. Player's premise: ${initialContext || 'Open-ended'}. Begin the narrative.`;
+
+export const buildActionPrompt = (input, extras = {}) => {
+    let msg = `User action: "${input}". Continue.`;
+    if (extras.roll) msg += ` [Dice: ${extras.roll}]`;
+    return msg;
+};
