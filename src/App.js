@@ -377,7 +377,17 @@ export function App() {
     };
 
     const initiateEnding = () => setShowEndConfirm(true);
-    const confirmEndingSequence = () => { setShowEndConfirm(false); setIsEnding(true); setTurnsRemaining(prefs.endingLength); };
+    const confirmEndingSequence = () => {
+        const remaining = Math.max(1, Number(prefs.endingLength) || 5);
+        // #region agent log
+        fetch('http://127.0.0.1:7332/ingest/448c3e2d-77b0-4a98-ab42-11af332cc836',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7f2b38'},body:JSON.stringify({sessionId:'7f2b38',location:'src/App.js:confirmEndingSequence',message:'confirm-ending',data:{endingLength:remaining,histLen:history.length,autoStart:true},hypothesisId:'C',timestamp:Date.now(),runId:'post-fix'})}).catch(()=>{});
+        // #endregion
+        snapshotRef.current = { ...snapshotRef.current, isEnding: true, turnsRemaining: remaining };
+        setShowEndConfirm(false);
+        setIsEnding(true);
+        setTurnsRemaining(remaining);
+        runTurn('continue', 'The tale now turns toward its ending. Begin the finale.');
+    };
     const resumeStory = () => {
         setIsEnding(false); setIsFinished(false); setTurnsRemaining(null);
         const lastTurn = history[history.length - 1];

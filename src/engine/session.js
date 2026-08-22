@@ -154,6 +154,9 @@ export const processTurn = async (io, promptType, inputVal, base) => {
     const baseStats = base?.stats ?? snap.stats;
     const baseScene = base?.scene ?? snap.scene;
     const { config, initialContext, prefs, isEnding, turnsRemaining, mediaStatus, apiKey, modelPrefs, styleCard } = snap;
+    // #region agent log
+    fetch('http://127.0.0.1:7332/ingest/448c3e2d-77b0-4a98-ab42-11af332cc836',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7f2b38'},body:JSON.stringify({sessionId:'7f2b38',location:'src/engine/session.js:processTurn',message:'processTurn-enter',data:{promptType,isEnding,turnsRemaining,finalTurn:!!(isEnding&&turnsRemaining<=1),histLen:(baseHistory||[]).length,streaming:prefs.streaming!==false},hypothesisId:'B',timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
 
     const signal = startTurnSignal(abortRef);
     const myController = abortRef.current;
@@ -279,6 +282,9 @@ export const processTurn = async (io, promptType, inputVal, base) => {
 
         if (isEnding) {
             const nextTurns = turnsRemaining - 1;
+            // #region agent log
+            fetch('http://127.0.0.1:7332/ingest/448c3e2d-77b0-4a98-ab42-11af332cc836',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7f2b38'},body:JSON.stringify({sessionId:'7f2b38',location:'src/engine/session.js:processTurn',message:'ending-tick',data:{from:turnsRemaining,nextTurns,willFinish:nextTurns<=0},hypothesisId:'B',timestamp:Date.now()})}).catch(()=>{});
+            // #endregion
             setTurnsRemaining(nextTurns);
             if (nextTurns <= 0) {
                 setIsFinished(true);
@@ -297,6 +303,9 @@ export const processTurn = async (io, promptType, inputVal, base) => {
             setSummary,
         });
     } catch (error) {
+        // #region agent log
+        fetch('http://127.0.0.1:7332/ingest/448c3e2d-77b0-4a98-ab42-11af332cc836',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7f2b38'},body:JSON.stringify({sessionId:'7f2b38',location:'src/engine/session.js:processTurn',message:'processTurn-catch',data:{name:error&&error.name,msg:String(error&&error.message||error).slice(0,240),isEnding,turnsRemaining},hypothesisId:'A',timestamp:Date.now()})}).catch(()=>{});
+        // #endregion
         if (isAbortError(error)) {
             if (abortRef.current && abortRef.current !== myController) return;
             setLoading(false); setIsStreaming(false); setStreamingText('');
