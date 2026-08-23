@@ -41,7 +41,7 @@ export function SidePanel({ app }) {
     if (activePanel !== 'summary' && activePanel !== 'codex') return null;
 
     return html`
-        <div className="absolute top-12 bottom-0 right-0 w-full md:w-80 bg-gray-950 border-l border-gray-800 shadow-2xl z-50 flex flex-col">
+        <div className="absolute inset-x-0 bottom-0 right-0 md:inset-x-auto w-full md:w-80 bg-gray-950 border-l border-gray-800 shadow-2xl z-50 flex flex-col" style=${{ top: 'calc(3rem + env(safe-area-inset-top, 0px))' }}>
             <div className="flex items-center justify-between p-3 border-b border-gray-800 bg-gray-900">
                 <h3 className="text-xs font-bold uppercase tracking-widest text-gray-300 flex items-center gap-2">
                     ${activePanel === 'codex' ? html`<${BookOpen} size=${14} /> Codex` : html`<${FileText} size=${14} /> Summary`}
@@ -88,7 +88,7 @@ export function SidePanel({ app }) {
                     <div className="space-y-4">
                         <div className="bg-gray-900/50 rounded border border-gray-800 p-3">
                             <h4 className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-2 flex items-center gap-2"><${Clock} size=${12} /> Running Log</h4>
-                            <div className="text-[10px] text-gray-400 leading-relaxed font-mono whitespace-pre-wrap">${summaryToText(summary)}</div>
+                            <div className="text-xs text-gray-400 leading-relaxed font-mono whitespace-pre-wrap">${summaryToText(summary)}</div>
                         </div>
                         ${currentTurnData && currentTurnData.image_prompt && html`
                             <div className="bg-blue-900/10 rounded border border-blue-900/30 p-3">

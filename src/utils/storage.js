@@ -113,7 +113,7 @@ const stripTurnMedia = (turn) => {
 };
 
 export const migrateSave = (data) => {
-    if (!data || !Array.isArray(data.history) || data.history.length === 0) return null;
+    if (!data || !Array.isArray(data.history)) return null;
     const history = data.history.map(stripTurnMedia);
     return {
         history,
@@ -154,6 +154,32 @@ export const buildSavePayload = (state) => ({
 export const countPages = (history) => (Array.isArray(history) ? history.filter((t) => t.type === 'ai').length : 0);
 
 const SLOT_INDEX_KEY = 'slotIndex';
+const CURRENT_SLOT_KEY = 'currentSlotId';
+
+const settingLabel = (config) => {
+    if (!config || typeof config !== 'object') return '';
+    if (config.setting === 'custom') return config.settingCustom || 'Custom';
+    return config.setting || '';
+};
+
+export const defaultSlotName = (state) => {
+    const pages = countPages(state?.history);
+    const title = state?.exportDetails?.title;
+    if (title && title !== 'The Unnamed Chronicle') return title;
+    const genre = settingLabel(state?.config);
+    if (pages === 0) return genre ? `New ${genre} story` : 'New story';
+    return genre ? `${genre} · ${pages} ${pages === 1 ? 'page' : 'pages'}` : `${pages} ${pages === 1 ? 'page' : 'pages'}`;
+};
+
+const slotMetaFromState = (id, state, existing = null) => ({
+    id,
+    name: existing?.customName ? existing.name : defaultSlotName(state),
+    savedAt: Date.now(),
+    pages: countPages(state?.history),
+    title: state?.exportDetails?.title || existing?.title || 'Untitled',
+    setting: settingLabel(state?.config) || existing?.setting || '',
+    customName: Boolean(existing?.customName),
+});
 
 let initLock = null;
 
@@ -252,30 +278,94 @@ export const listSlots = async () => {
     return [];
 };
 
-export const saveToSlot = async (name, state, keepLastNImages = 0) => {
-    const payload = buildSavePayload(state);
+export const getCurrentSlotId = async () => {
+    try {
+        const id = await idbGet('meta', CURRENT_SLOT_KEY);
+        return id || null;
+    } catch { /* ignore */ }
+    return null;
+};
+
+export const setCurrentSlotId = async (id) => {
+    if (id) await idbPut('meta', id, CURRENT_SLOT_KEY);
+    else {
+        try { await idbDelete('meta', CURRENT_SLOT_KEY); } catch { /* ignore */ }
+    }
+};
+
+const writeSlotIndex = async (index) => {
+    await idbPut('meta', index, SLOT_INDEX_KEY);
+    return index;
+};
+
+export const createStorySlot = async (state, keepLastNImages = 0) => {
     const id = `slot_${Date.now()}`;
-    const entry = {
-        id,
-        name: name || 'Save',
-        savedAt: Date.now(),
-        pages: countPages(state.history),
-        title: state.exportDetails?.title || 'Untitled',
-    };
+    const payload = buildSavePayload(state);
+    const entry = slotMetaFromState(id, state);
     await idbPut('saves', payload, id);
     try { await copyImages(ACTIVE_SAVE_ID, id, keepLastNImages); } catch { /* ignore */ }
     const prev = await listSlots();
-    const next = [entry, ...prev].slice(0, 12);
-    await idbPut('meta', next, SLOT_INDEX_KEY);
+    await writeSlotIndex([entry, ...prev.filter((s) => s.id !== id)]);
+    await setCurrentSlotId(id);
     return entry;
+};
+
+export const writeStorySlot = async (id, state, keepLastNImages = 0) => {
+    if (!id) return null;
+    const payload = buildSavePayload(state);
+    await idbPut('saves', payload, id);
+    try { await copyImages(ACTIVE_SAVE_ID, id, keepLastNImages); } catch { /* ignore */ }
+    const prev = await listSlots();
+    const existing = prev.find((s) => s.id === id) || null;
+    const entry = slotMetaFromState(id, state, existing);
+    const next = existing
+        ? prev.map((s) => (s.id === id ? entry : s))
+        : [entry, ...prev];
+    await writeSlotIndex(next);
+    return entry;
+};
+
+export const renameSlot = async (id, name) => {
+    const trimmed = String(name || '').trim();
+    const prev = await listSlots();
+    const next = prev.map((s) => (s.id === id ? { ...s, name: trimmed || s.name, customName: true } : s));
+    return writeSlotIndex(next);
+};
+
+export const reorderSlots = async (id, direction) => {
+    const prev = await listSlots();
+    const i = prev.findIndex((s) => s.id === id);
+    const j = i + direction;
+    if (i < 0 || j < 0 || j >= prev.length) return prev;
+    const next = prev.slice();
+    [next[i], next[j]] = [next[j], next[i]];
+    return writeSlotIndex(next);
+};
+
+export const saveToSlot = async (name, state, keepLastNImages = 0) => {
+    const entry = await createStorySlot(state, keepLastNImages);
+    if (name) await renameSlot(entry.id, name);
+    const latest = (await listSlots()).find((s) => s.id === entry.id);
+    return latest || { ...entry, name: name || entry.name };
 };
 
 export const deleteSlot = async (id) => {
     try { await idbDelete('saves', id); } catch { /* ignore */ }
     try { await deleteImagesForSave(id); } catch { /* ignore */ }
+    const current = await getCurrentSlotId();
+    if (current === id) await setCurrentSlotId(null);
     const next = (await listSlots()).filter((s) => s.id !== id);
-    await idbPut('meta', next, SLOT_INDEX_KEY);
-    return next;
+    return writeSlotIndex(next);
+};
+
+export const ensureActiveMigratedToLibrary = async () => {
+    const existingId = await getCurrentSlotId();
+    const slots = await listSlots();
+    if (existingId && slots.some((s) => s.id === existingId)) return existingId;
+    const active = await readActiveSave();
+    if (!active || !Array.isArray(active.history) || active.history.length === 0) return existingId || null;
+    const entry = await createStorySlot(active);
+    return entry.id;
 };
 
 export const loadSlot = async (id) => {

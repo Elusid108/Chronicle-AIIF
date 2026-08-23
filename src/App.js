@@ -2,10 +2,11 @@ import { useState, useEffect, useRef } from 'react';
 import { html } from './html.js';
 import { DEFAULT_CONFIG, DEFAULT_CODEX, EMPTY_SCENE } from './constants.js';
 import {
-    STORAGE_KEYS, loadJSON, saveJSON, countPages,
+    STORAGE_KEYS, loadJSON, saveJSON,
     initStorage, readActiveSave, writeActiveSave, clearActiveSave, attachStoredImages,
-    listSlots, saveToSlot, deleteSlot, loadSlot, exportStoryFile, importStoryFile,
-    normalizeSummary,
+    listSlots, deleteSlot, loadSlot, exportStoryFile, importStoryFile,
+    normalizeSummary, createStorySlot, writeStorySlot, renameSlot, reorderSlots,
+    setCurrentSlotId, ensureActiveMigratedToLibrary,
 } from './utils/storage.js';
 import { fetchAvailableModels, generateImage, generateSpeech } from './api/gemini.js';
 import { buildInitialPrompt, buildSystemPrompt } from './engine/prompt.js';
@@ -29,6 +30,7 @@ const DEFAULT_PREFS = {
     statsEnabled: false,
     consistencyCheck: false,
     keepLastNImages: 4,
+    pacing: 'standard',
 };
 
 export function App() {
@@ -37,25 +39,23 @@ export function App() {
     const [status, setStatus] = useState('');
 
     const [config, setConfig] = useState({ ...DEFAULT_CONFIG });
-    const [prefs, setPrefs] = useState({ ...DEFAULT_PREFS });
+    const [prefs, setPrefs] = useState(() => ({ ...DEFAULT_PREFS, ...loadJSON(STORAGE_KEYS.prefs, {}) }));
     const [mediaStatus, setMediaStatus] = useState({ images: 'active', audio: 'active' });
 
     const [availableModels, setAvailableModels] = useState({ text: [], image: [], audio: [] });
-    const [modelPrefs, setModelPrefs] = useState({ textModel: '', imageModel: '', audioModel: '' });
+    const [modelPrefs, setModelPrefs] = useState(() => ({ textModel: '', imageModel: '', audioModel: '', ...loadJSON(STORAGE_KEYS.modelPrefs, {}) }));
     const [modelListLoading, setModelListLoading] = useState(false);
 
     const [favorites, setFavorites] = useState(() => loadJSON(STORAGE_KEYS.favVoices, []));
 
     const [initialContext, setInitialContext] = useState('');
-    const [hasSavedGame, setHasSavedGame] = useState(false);
-    const [savedPageCount, setSavedPageCount] = useState(0);
     const [activePanel, setActivePanel] = useState(null);
     const [slots, setSlots] = useState([]);
+    const [currentSlotId, setCurrentSlotIdState] = useState(null);
 
     const [showExportModal, setShowExportModal] = useState(false);
     const [showExitConfirm, setShowExitConfirm] = useState(false);
     const [showEndConfirm, setShowEndConfirm] = useState(false);
-    const [showNewConfirm, setShowNewConfirm] = useState(false);
     const [exportDetails, setExportDetails] = useState({ title: 'The Unnamed Chronicle', author: 'Anonymous' });
 
     const [history, setHistory] = useState([]);
@@ -97,26 +97,43 @@ export function App() {
     snapshotRef.current = {
         history, codex, summary, stats, scene, styleCard, config, initialContext,
         prefs, isEnding, turnsRemaining, isFinished, mediaStatus, apiKey, modelPrefs,
+        currentSlotId,
     };
 
     const showToast = (type, message) => {
         setToast({ type, message });
         clearTimeout(toastTimer.current);
-        toastTimer.current = setTimeout(() => setToast(null), 3500);
+        toastTimer.current = setTimeout(() => setToast(null), type === 'error' ? 10000 : 5000);
     };
+    const dismissToast = () => {
+        clearTimeout(toastTimer.current);
+        setToast(null);
+    };
+
+    useEffect(() => {
+        const applyViewportHeight = () => {
+            const h = window.visualViewport?.height || window.innerHeight;
+            document.documentElement.style.setProperty('--app-height', `${Math.round(h)}px`);
+        };
+        applyViewportHeight();
+        const vv = window.visualViewport;
+        vv?.addEventListener('resize', applyViewportHeight);
+        vv?.addEventListener('scroll', applyViewportHeight);
+        window.addEventListener('resize', applyViewportHeight);
+        return () => {
+            vv?.removeEventListener('resize', applyViewportHeight);
+            vv?.removeEventListener('scroll', applyViewportHeight);
+            window.removeEventListener('resize', applyViewportHeight);
+        };
+    }, []);
 
     useEffect(() => {
         const storedKey = localStorage.getItem(STORAGE_KEYS.apiKey);
         if (storedKey) setApiKey(storedKey);
-        setPrefs((prev) => ({ ...prev, ...loadJSON(STORAGE_KEYS.prefs, {}) }));
-        setModelPrefs((prev) => ({ ...prev, ...loadJSON(STORAGE_KEYS.modelPrefs, {}) }));
         (async () => {
             await initStorage();
-            const save = await readActiveSave();
-            if (save) {
-                setHasSavedGame(true);
-                setSavedPageCount(countPages(save.history));
-            }
+            const id = await ensureActiveMigratedToLibrary();
+            setCurrentSlotIdState(id);
             setSlots(await listSlots());
         })();
     }, []);
@@ -133,16 +150,21 @@ export function App() {
         if (history.length === 0) return;
         const writeId = ++saveWriteId.current;
         let cancelled = false;
+        const state = {
+            history, codex, summary, scene, styleCard, currentSlideIndex, isEnding, turnsRemaining,
+            isFinished, exportDetails, config, initialContext, stats,
+        };
         (async () => {
             await initStorage();
             if (cancelled || writeId !== saveWriteId.current) return;
-            writeActiveSave({
-                history, codex, summary, scene, styleCard, currentSlideIndex, isEnding, turnsRemaining,
-                isFinished, exportDetails, config, initialContext, stats,
-            });
+            await writeActiveSave(state);
+            if (currentSlotId) {
+                await writeStorySlot(currentSlotId, state, prefs.keepLastNImages || 0);
+                if (!cancelled) setSlots(await listSlots());
+            }
         })();
         return () => { cancelled = true; };
-    }, [history, codex, summary, scene, styleCard, currentSlideIndex, isEnding, turnsRemaining, isFinished, exportDetails, config, initialContext, stats]);
+    }, [history, codex, summary, scene, styleCard, currentSlideIndex, isEnding, turnsRemaining, isFinished, exportDetails, config, initialContext, stats, currentSlotId, prefs.keepLastNImages]);
 
     useEffect(() => {
         let animationFrame;
@@ -226,8 +248,13 @@ export function App() {
             });
             if (snapshotted.blob && (snapshotRef.current.prefs.keepLastNImages || 0) > 0) {
                 try {
-                    await putTurnImage(ACTIVE_SAVE_ID, idx, snapshotted.blob);
-                    await pruneTurnImages(ACTIVE_SAVE_ID, snapshotRef.current.prefs.keepLastNImages);
+                    const imageSaveId = snapshotRef.current.currentSlotId || ACTIVE_SAVE_ID;
+                    await putTurnImage(imageSaveId, idx, snapshotted.blob);
+                    await pruneTurnImages(imageSaveId, snapshotRef.current.prefs.keepLastNImages);
+                    if (imageSaveId !== ACTIVE_SAVE_ID) {
+                        await putTurnImage(ACTIVE_SAVE_ID, idx, snapshotted.blob);
+                        await pruneTurnImages(ACTIVE_SAVE_ID, snapshotRef.current.prefs.keepLastNImages);
+                    }
                 } catch { /* ignore */ }
             }
         });
@@ -294,27 +321,38 @@ export function App() {
 
     const runTurn = (promptType, inputVal, base) => processTurn(turnIo(), promptType, inputVal, base);
 
+    const emptyStoryState = () => ({
+        history: [],
+        codex: { ...DEFAULT_CODEX },
+        summary: { ...EMPTY_SUMMARY },
+        stats: {},
+        scene: { ...EMPTY_SCENE },
+        styleCard: '',
+        currentSlideIndex: 0,
+        isEnding: false,
+        turnsRemaining: null,
+        isFinished: false,
+        exportDetails: { title: 'The Unnamed Chronicle', author: 'Anonymous' },
+        config,
+        initialContext,
+    });
+
     const startGame = async () => {
         abortActiveTurn(abortRef);
         revokeHistoryImages(history);
         saveWriteId.current += 1;
         await initStorage();
         await clearActiveSave();
+        const fresh = emptyStoryState();
+        const entry = await createStorySlot(fresh, 0);
         const resetSnap = {
             ...snapshotRef.current,
-            history: [],
-            codex: { ...DEFAULT_CODEX },
-            summary: { ...EMPTY_SUMMARY },
-            stats: {},
-            scene: { ...EMPTY_SCENE },
-            styleCard: '',
-            isEnding: false,
-            turnsRemaining: null,
-            isFinished: false,
+            ...fresh,
+            currentSlotId: entry.id,
         };
         snapshotRef.current = resetSnap;
-        setHasSavedGame(false);
-        setSavedPageCount(0);
+        setCurrentSlotIdState(entry.id);
+        setSlots(await listSlots());
         setHistory([]);
         setCodex({ ...DEFAULT_CODEX });
         setSummary({ ...EMPTY_SUMMARY });
@@ -416,7 +454,6 @@ export function App() {
         revokeHistoryImages(history);
         await initStorage();
         await clearActiveSave();
-        setHasSavedGame(false); setSavedPageCount(0);
         setHistory([]); setCodex({ ...DEFAULT_CODEX }); setCurrentSlideIndex(0);
         setSummary({ ...EMPTY_SUMMARY }); setScene({ ...EMPTY_SCENE }); setStyleCard(''); setStats({}); setUserInput('');
         setIsEnding(false); setTurnsRemaining(null); setIsFinished(false);
@@ -427,12 +464,11 @@ export function App() {
         stopAudio(); setActivePanel(null); setEditingAction(null);
     };
 
-    const goHome = () => {
+    const goHome = async () => {
         stopAudio();
-        setSavedPageCount(countPages(history));
-        if (history.length > 0) setHasSavedGame(true);
         setView('setup');
         setActivePanel(null);
+        setSlots(await listSlots());
     };
     const confirmAbandon = () => { setShowExitConfirm(false); resetGame(); setView('setup'); };
 
@@ -475,6 +511,11 @@ export function App() {
     const hydrate = async (s, imageSaveId = ACTIVE_SAVE_ID) => {
         revokeHistoryImages(history);
         const withImages = await attachStoredImages(s, imageSaveId);
+        if (imageSaveId && imageSaveId !== ACTIVE_SAVE_ID) {
+            await setCurrentSlotId(imageSaveId);
+            setCurrentSlotIdState(imageSaveId);
+            try { await copyImages(imageSaveId, ACTIVE_SAVE_ID, snapshotRef.current.prefs.keepLastNImages || 0); } catch { /* ignore */ }
+        }
         setHistory(withImages.history);
         setCodex(withImages.codex);
         setSummary(normalizeSummary(withImages.summary));
@@ -487,38 +528,44 @@ export function App() {
         setConfig({ ...DEFAULT_CONFIG, ...withImages.config });
         setInitialContext(withImages.initialContext);
         setView('game'); setActivePanel(null);
-        if (imageSaveId && imageSaveId !== ACTIVE_SAVE_ID) {
-            try { await copyImages(imageSaveId, ACTIVE_SAVE_ID, snapshotRef.current.prefs.keepLastNImages || 0); } catch { /* ignore */ }
-        }
         withImages.history.forEach((turn, idx) => {
             if (turn.type === 'ai' && turn.image_prompt && !turn.image) regenImageForIndex(idx, turn);
         });
     };
 
-    const resumeSavedGame = async () => {
+    const resumeLatestStory = async () => {
         await initStorage();
+        const list = await listSlots();
+        const latest = list.reduce((best, s) => (!best || (s.savedAt || 0) > (best.savedAt || 0) ? s : best), null);
+        if (latest) {
+            await loadSlotById(latest.id);
+            return;
+        }
         const s = await readActiveSave();
         if (!s) { showToast('error', 'No saved story found'); return; }
         await hydrate(s, ACTIVE_SAVE_ID);
     };
 
     const refreshSlots = async () => setSlots(await listSlots());
-    const saveSnapshot = async () => {
-        await initStorage();
-        const name = `${exportDetails.title} (${countPages(history)}p)`;
-        await saveToSlot(name, {
-            history, codex, summary, scene, styleCard, currentSlideIndex, isEnding, turnsRemaining,
-            isFinished, exportDetails, config, initialContext, stats,
-        }, prefs.keepLastNImages || 0);
-        await refreshSlots();
-        showToast('info', 'Saved to Library');
-    };
     const loadSlotById = async (id) => {
         const s = await loadSlot(id);
         if (!s) { showToast('error', 'Could not load save'); return; }
         await hydrate(s, id);
     };
-    const deleteSlotById = async (id) => { await deleteSlot(id); await refreshSlots(); };
+    const deleteSlotById = async (id) => {
+        const next = await deleteSlot(id);
+        if (currentSlotId === id) {
+            setCurrentSlotIdState(null);
+            await clearActiveSave();
+        }
+        setSlots(next);
+    };
+    const renameSlotById = async (id, name) => {
+        setSlots(await renameSlot(id, name));
+    };
+    const moveSlotById = async (id, direction) => {
+        setSlots(await reorderSlots(id, direction));
+    };
     const exportStory = () => {
         exportStoryFile({
             history, codex, summary, scene, styleCard, currentSlideIndex, isEnding, turnsRemaining,
@@ -529,7 +576,9 @@ export function App() {
     const importStory = async (file) => {
         try {
             const s = await importStoryFile(file);
-            await hydrate(s, null);
+            const entry = await createStorySlot(s, 0);
+            await hydrate(s, entry.id);
+            setSlots(await listSlots());
             showToast('info', 'Story imported');
         } catch (e) {
             showToast('error', `Import failed: ${e.message}`);
@@ -578,6 +627,7 @@ export function App() {
 
     const contextChars = buildSystemPrompt({
         config, initialContext, summary, codex, history, statsEnabled: prefs.statsEnabled, stats, scene, styleCard,
+        pacing: prefs.pacing,
     }).length;
 
     if (!apiKey) return html`<${ApiKeyModal} onSave=${handleKeySave} />`;
@@ -587,9 +637,9 @@ export function App() {
         availableModels, modelPrefs, setModelPrefs, modelListLoading, fetchModels,
         favorites, toggleFavorite, previewVoice, previewPlaying,
         initialContext, setInitialContext, status, loading,
-        hasSavedGame, savedPageCount, activePanel, togglePanel, clearApiKey,
-        slots, loadSlotById, deleteSlotById, importStory, saveSnapshot,
-        showNewConfirm, setShowNewConfirm, startGame, resumeSavedGame,
+        activePanel, togglePanel, clearApiKey,
+        slots, currentSlotId, loadSlotById, deleteSlotById, renameSlotById, moveSlotById, importStory,
+        startGame, resumeLatestStory,
         history, codex, summary, scene, stats, currentSlideIndex, currentTurnData, isLatestSlide,
         displayImage, isBlurring, generatingAssets, isPlaying, handleSpeak,
         userInput, setUserInput, handleTurn,
@@ -599,7 +649,7 @@ export function App() {
         selectedCodexEntry, setSelectedCodexEntry, setCurrentSlideIndex,
         saveCodexEdits, toggleCodexPin, mergeSelectedInto,
         isStreaming, streamingText, editingAction, setEditingActionText, beginEditAction, cancelEditAction, submitEditAction,
-        rewindTurn, regenerateTurn, goHome, toast, contextChars,
+        rewindTurn, regenerateTurn, goHome, toast, dismissToast, contextChars,
         textScrollRef, onTouchStart, onTouchMove, onTouchEnd, prevSlide, nextSlide,
     };
 

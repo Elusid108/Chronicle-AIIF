@@ -1,4 +1,4 @@
-export const CHRONICLE_VERSION = '3.0.0';
+export const CHRONICLE_VERSION = '3.1.1';
 
 export const GENRE_PROMPTS = {
     fantasy: "High fantasy setting, medieval world, intricate magic systems, mythical creatures, dragons and elves, epic quests, ancient ruins, sword and sorcery, grand narrative scale, world-building focus",

@@ -1,6 +1,8 @@
 # Chronicle: Iterative Fiction Engine
 > A serverless, AI-driven interactive fiction engine that generates cohesive narratives, dynamic scene illustrations, and fully voiced dialogue in real time.
 
+**v3.1.1** — exclusive text vs choice input, play layout sized to the visible mobile viewport, and Pacing (Standard / Direct).
+
 ## Overview
 Chronicle is a browser-based interactive storytelling app that generates branching choose-your-own-adventure experiences. It runs entirely client-side against the Google Gemini and Imagen APIs (with a Pollinations fallback for images and the browser's speech synthesis as an audio fallback). There is no build step: GitHub Pages serves the files as-is.
 
@@ -8,42 +10,46 @@ As the story unfolds, the engine maintains a persistent memory: a running log of
 
 ## Key Features
 * **Persistent memory engine** — per-turn beats, automatic compaction of older beats into a long-term summary (with a rewind-safe `foldedThrough` watermark), the most recent prose (or a style card) for voice continuity, a current-scene object that is always injected, and relevance-filtered + player-pinned codex entries.
-* **Structured output** — narrative turns are generated with a Gemini `responseSchema`, guaranteeing narrative, choices, scene, codex updates, summary, and image prompt every turn.
+* **Structured output** — narrative turns are generated with a Gemini `responseSchema`, guaranteeing narrative, scene, codex updates, summary, and image prompt every turn. Choice buttons are only requested in choice mode.
+* **Choice or text input** — **Choice** shows a 2×2 action grid and no text field. **Text** shows only the type-in box: leftover buttons from an earlier page are hidden immediately, and the next turn does not generate actions.
 * **Streaming narrative** — text is revealed as it is written (toggle in Settings), with a non-streaming fallback.
 * **Gameplay controls** — rewind a turn, regenerate the latest turn, or edit your last action and regenerate from there. In-flight generations are aborted so turns cannot race.
 * **Editable bible** — pin, edit, or merge codex entries; player-authored facts are always injected.
 * **Optional stat HUD** — let the Game Master track stats (health, resources, etc.) shown as a HUD; off by default.
 * **Multi-modal generation** — real-time generated imagery and text-to-speech narration accompany the text. Images are compressed on a web worker and stored in IndexedDB (not `localStorage`).
-* **Saves & portability** — automatic resume in IndexedDB, a multi-slot Library, and JSON export/import of a full story. Existing v2 `localStorage` saves are migrated on first load.
+* **Auto-Play** — when off, Chronicle does **not** call the TTS API after a turn (saves tokens and time). The speaker button still narrates on demand.
+* **Live story list** — every playthrough auto-saves into its own IndexedDB slot. The home page lists stories with page count, genre, and last played; you can rename, delete, or reorder them. New Simulation starts another slot and never wipes the others. JSON export/import remains. Existing v2 `localStorage` saves and a leftover `active` save are migrated on first load.
+* **Pacing** — **Standard** is the current literary voice. **Direct** asks for 2–4 short concrete sentences (applies on the next turn).
+* **Mobile chrome** — Home and the page counter stay visible; Settings, Codex, the running log, and End live in a More menu on small screens. The play screen uses the visual viewport height so Chrome’s URL bar and the Android nav bar cannot clip the header. Settings and logs are full-width. Toasts are dismissible and stay up longer on errors.
 * **Model selection** — discover models available to your key and pick text/image/audio models, each with an automatic fallback chain.
 
 ## Architecture
-No build step. The app is plain ES modules loaded directly in the browser via an `importmap`, using [`htm`](https://github.com/developit/htm) (tagged-template markup) instead of JSX so no transpiler is needed. Tailwind is loaded from its CDN. A service worker caches the app shell and CDNs so a CDN blip does not white-screen the UI (play still needs Gemini).
+No build step. The app is plain ES modules loaded directly in the browser via an `importmap`, using [`htm`](https://github.com/developit/htm) (tagged-template markup) instead of JSX so no transpiler is needed. Tailwind is loaded from its CDN. On load the app unregisters any leftover service worker and clears old caches so a stale shell cannot pin you to an old build.
 
 ```
 index.html              # shell: importmap, Tailwind CDN, fonts, mounts src/main.js
-sw.js                   # app-shell cache (same-origin + CDNs); Gemini is network-only
+sw.js                   # leftover kill-switch: unregisters itself and clears caches
 src/
-  main.js               # bootstrap + service worker registration
+  main.js               # bootstrap; unregisters service workers on load
   html.js               # htm bound to React.createElement
-  constants.js          # genre/style/voice tables, defaults
+  constants.js          # genre/style/voice tables, defaults, CHRONICLE_VERSION
   App.js                # React state, wiring, hydrate/save
   api/gemini.js         # text (stream + schema), image, TTS, model discovery, key header + backoff
   engine/
-    prompt.js           # system-prompt assembly + TURN_SCHEMA
+    prompt.js           # system-prompt assembly + buildTurnSchema
     memory.js           # codex merge/records, summary beats, compaction, relevance, image-name scrub
     session.js          # processTurn, rebuildBase, abort, compact, style card, continuity check
   utils/
     audio.js            # PCM -> WAV
     idb.js              # IndexedDB (saves + image blobs)
     images.js           # web-worker image snapshot client
-    storage.js          # save/load, v3 migration, slots, import/export
+    storage.js          # save/load, live slots, import/export
   workers/
     compress-image.js   # OffscreenCanvas WebP/JPEG encode
   components/
-    ui.js               # Button, Input
+    ui.js               # Button, Input, Toggle, Toast
     ApiKeyModal.js
-    SetupView.js
+    SetupView.js        # home, start options, story list
     SettingsPanel.js
     Panels.js           # Codex/Summary side panel + editable codex modal
     GameView.js         # main play screen
@@ -68,7 +74,12 @@ The API key is sent as the `x-goog-api-key` header (not in the query string). 42
    * `python -m http.server 8000` then open `http://localhost:8000`, or
    * `npx serve` from the repo root.
 3. Open the app and enter a valid Google Gemini API key when prompted.
-4. To host on GitHub Pages, push the repository and enable Pages from the **main branch root**. No build is required. Project pages (`https://user.github.io/Chronicle-AIIF/`) work because workers and the service worker use relative URLs.
+4. To host on GitHub Pages, push the repository and enable Pages from the **main branch root**. No build is required. Project pages (`https://user.github.io/Chronicle-AIIF/`) work because workers use relative URLs.
+
+## Playing
+On the home screen pick a genre and visual style, then **Input** (choice vs text), **Pacing**, and **Auto-Play**. Each New Simulation is a story in the list. Tap a row to continue it; use the pencil, trash, and arrows to rename, delete, or reorder.
+
+In play, phones keep **Home** and the page number in the header. Open **More** for Settings, Codex, the running/performance log, and End story. On a wider screen those controls stay in the header.
 
 ## Model Configuration
 Once a key is saved, Chronicle queries Google's model listing API. In Settings (gear icon) under **AI Models**:

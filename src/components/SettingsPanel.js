@@ -1,14 +1,7 @@
 import { html } from '../html.js';
 import { Settings, X, CheckCircle, Trash2, WifiOff, RefreshCw, Volume2, Play, Star } from 'lucide-react';
 import { voicesList, getVoiceMeta, CHRONICLE_VERSION } from '../constants.js';
-
-function Toggle({ on, onClick }) {
-    return html`
-        <button onClick=${onClick} className=${`w-8 h-4 rounded-full relative transition-colors ${on ? 'bg-blue-600' : 'bg-gray-700'}`}>
-            <div className=${`absolute top-0.5 w-3 h-3 bg-white rounded-full transition-transform ${on ? 'translate-x-4' : 'translate-x-0'}`}></div>
-        </button>
-    `;
-}
+import { Toggle } from './ui.js';
 
 export function SettingsPanel({ app }) {
     const {
@@ -28,7 +21,7 @@ export function SettingsPanel({ app }) {
     const modelCount = availableModels.text.length || availableModels.image.length || availableModels.audio.length;
 
     return html`
-        <div className="absolute top-14 right-4 w-80 bg-gray-900 border border-gray-800 rounded-xl shadow-2xl z-50 p-4 overflow-y-auto max-h-[80vh] custom-scrollbar">
+        <div className="fixed inset-0 md:absolute md:inset-auto md:top-14 md:right-4 md:w-80 bg-gray-900 border-gray-800 md:border md:rounded-xl shadow-2xl z-50 p-4 overflow-y-auto md:max-h-[80vh] custom-scrollbar" style=${{ paddingTop: 'max(1rem, env(safe-area-inset-top))', paddingBottom: 'max(1rem, env(safe-area-inset-bottom))' }}>
             <div className="flex justify-between items-center mb-4">
                 <h3 className="text-xs font-bold uppercase text-gray-500 flex items-center gap-2"><${Settings} size=${12} /> Preferences</h3>
                 <button onClick=${() => togglePanel(null)}><${X} size=${14} className="text-gray-500 hover:text-white" /></button>
@@ -97,6 +90,13 @@ export function SettingsPanel({ app }) {
                 <div>
                     <label className="text-[10px] text-blue-400 font-bold block mb-2 font-sans">STORY ENGINE</label>
                     <div className="space-y-2">
+                        <div>
+                            <div className="text-xs text-gray-300 mb-1">Pacing</div>
+                            <div className="flex gap-1">
+                                ${['standard', 'direct'].map((p) => html`<button key=${p} type="button" onClick=${() => setPrefs({ ...prefs, pacing: p })} className=${`flex-1 p-2 text-[10px] border rounded uppercase ${(prefs.pacing || 'standard') === p ? 'bg-blue-900 border-blue-500 text-white' : 'border-gray-700 text-gray-500'}`}>${p}</button>`)}
+                            </div>
+                            <div className="text-[9px] text-gray-600 mt-1">${prefs.pacing === 'direct' ? 'Short, concrete beats. Applies on the next turn.' : 'Literary, atmospheric prose. Applies on the next turn.'}</div>
+                        </div>
                         <div className="flex justify-between items-center">
                             <div>
                                 <div className="text-xs text-gray-300">Stream narrative</div>
@@ -167,7 +167,10 @@ export function SettingsPanel({ app }) {
                 `}
 
                 <div className="flex justify-between items-center">
-                    <label className="text-[10px] text-blue-400 font-bold font-sans uppercase">Auto-Play</label>
+                    <div>
+                        <label className="text-[10px] text-blue-400 font-bold font-sans uppercase">Auto-Play</label>
+                        <div className="text-[9px] text-gray-600">Narrate each page automatically</div>
+                    </div>
                     <${Toggle} on=${prefs.autoPlay} onClick=${() => setPrefs({ ...prefs, autoPlay: !prefs.autoPlay })} />
                 </div>
 

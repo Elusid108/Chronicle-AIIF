@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Chronicle: Iterative Fiction Engine</title>
 
     <script src="https://cdn.tailwindcss.com"></script>
@@ -48,7 +48,10 @@
 
     <style>
         /* Base styles */
-        body { margin: 0; background-color: #000; color: #e5e7eb; overflow: hidden; }
+        html { --app-height: 100svh; }
+        html, body { margin: 0; background-color: #000; color: #e5e7eb; min-height: 100%; }
+        body { overflow-x: hidden; overflow-y: auto; }
+        #root { min-height: var(--app-height, 100svh); }
 
         /* Custom scrollbar to match the app's aesthetic */
         .custom-scrollbar::-webkit-scrollbar { width: 6px; }

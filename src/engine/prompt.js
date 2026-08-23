@@ -48,6 +48,14 @@ export const TURN_SCHEMA = {
     propertyOrdering: ['narrative', 'choices', 'summary_update', 'image_prompt', 'scene', 'codex_updates', 'state_updates'],
 };
 
+export const buildTurnSchema = (mode = 'choice') => {
+    if (mode !== 'text') return TURN_SCHEMA;
+    return {
+        ...TURN_SCHEMA,
+        required: TURN_SCHEMA.required.filter((key) => key !== 'choices'),
+    };
+};
+
 const resolveText = (value, custom, map) => {
     const key = value === 'custom' ? custom : value;
     return map[key] || key;
@@ -58,7 +66,7 @@ export const styleText = (config) => resolveText(config.style, config.styleCusto
 
 const choiceTask = (mode) => {
     if (mode === 'text') {
-        return `2. CHOICES: Optional. You MAY return up to 4 short suggested actions in the choices array; the player types freely. On a final conclusion turn, return an empty array.`;
+        return `2. CHOICES: Do not invent suggested actions. Omit choices or return an empty array. The player types freely.`;
     }
     return `2. CHOICES: Provide exactly 4 distinct, full-phrase choices in the choices array every turn (unless this is a final conclusion turn, then return an empty array).`;
 };
@@ -66,8 +74,15 @@ const choiceTask = (mode) => {
 // Assemble the system prompt. Context is layered: current scene (always),
 // a folded long-term summary, recent beats, a style card and/or last prose,
 // and only the most relevant (plus pinned) codex entries.
+const pacingTask = (pacing) => {
+    if (pacing === 'direct') {
+        return `PACING: Direct. Write 2–4 short second-person sentences. Name the salient objects, exits, and people in plain language. No atmosphere, metaphor, or purple prose. Example: "You wake up in a dark room. There is a locked door, a bed, a chair, and a crate. What do you do?"`;
+    }
+    return `PACING: Standard. Literary second-person prose with atmosphere and sensory detail, at the usual length.`;
+};
+
 export const buildSystemPrompt = ({
-    config, initialContext, summary, codex, history, statsEnabled, stats, scene, styleCard,
+    config, initialContext, summary, codex, history, statsEnabled, stats, scene, styleCard, pacing,
 }) => {
     const genre = genreText(config);
     const style = styleText(config);
@@ -93,7 +108,14 @@ export const buildSystemPrompt = ({
         `PLAYER REQUEST: ${initialContext || '(None)'}. The story MUST honor this premise and tone.`,
     ];
 
-    if (styleCard) sections.push(`VOICE / STYLE CARD:\n${styleCard}`);
+    sections.push(pacingTask(pacing));
+
+    if (styleCard) {
+        const cardNote = pacing === 'direct'
+            ? 'VOICE / STYLE CARD (keep person/tense; prefer Direct brevity over this card\'s length):\n'
+            : 'VOICE / STYLE CARD:\n';
+        sections.push(`${cardNote}${styleCard}`);
+    }
 
     sections.push(`CURRENT SCENE (authoritative; keep this consistent unless the action changes it):\n${JSON.stringify(currentScene)}`);
 
@@ -101,8 +123,11 @@ export const buildSystemPrompt = ({
     sections.push(`RECENT EVENTS (running log):\n${recentBeatsText}`);
 
     if (recent.length) {
+        const proseLead = pacing === 'direct'
+            ? 'PREVIOUS PROSE (keep person and tense; do not match its length if it was longer; do not repeat it):\n'
+            : 'PREVIOUS PROSE (continue this exact voice, tone, and tense; do not repeat it):\n';
         sections.push(
-            `PREVIOUS PROSE (continue this exact voice, tone, and tense; do not repeat it):\n` +
+            proseLead +
             recent.map((n, i) => `[${i === recent.length - 1 ? 'most recent' : 'earlier'}]\n${n}`).join('\n---\n')
         );
     }
@@ -124,7 +149,7 @@ export const buildSystemPrompt = ({
 
     sections.push(
 `TASK:
-1. NARRATIVE: Write the next segment in SECOND PERSON ("You..."). The player IS the protagonist. Maintain continuity with PREVIOUS PROSE. The narrative must NOT include the numbered choice list. The narrative ends with a setup question (e.g. "What do you do?").
+1. NARRATIVE: Write the next segment in SECOND PERSON ("You..."). The player IS the protagonist. Follow PACING. Maintain continuity with PREVIOUS PROSE. The narrative must NOT include the numbered choice list. The narrative ends with a setup question (e.g. "What do you do?").
 ${choiceTask(config.mode)}
 3. LORE SCANNING (CRITICAL): Act as a database engine. Add codex_updates for EVERY named character, location, or significant item in your narrative. If an entity is new, add it; if a known entity gains new detail, update it. Do not be lazy.
 4. SUMMARY: summary_update is a concise one-to-two sentence log of what happened THIS turn only.
@@ -138,7 +163,7 @@ ${extra.join('\n')}`
 export const endingInstruction = (turnsRemaining, mode = 'choice') => {
     if (turnsRemaining > 1) {
         const choiceLine = mode === 'text'
-            ? 'Suggested choices are optional.'
+            ? 'Do not provide suggested choices; return an empty choices array.'
             : 'Still provide 4 choices.';
         return `\n\nCRITICAL: ENDING SEQUENCE. ${turnsRemaining} beats remain, including this one. ${choiceLine} Steer toward a satisfying conclusion. Keep the JSON complete; do not truncate fields.`;
     }

@@ -6,7 +6,7 @@ import { normalizeSummary, summaryToText } from '../utils/storage.js';
 import {
     appendBeat, applyCompaction, mergeCodex, mergeScene, scrubImagePrompt, splitBeatsForCompaction,
 } from './memory.js';
-import { buildActionPrompt, buildSystemPrompt, endingInstruction, TURN_SCHEMA } from './prompt.js';
+import { buildActionPrompt, buildSystemPrompt, buildTurnSchema, endingInstruction } from './prompt.js';
 
 export { EMPTY_SCENE, EMPTY_SUMMARY };
 
@@ -68,7 +68,7 @@ export const rebuildBase = (remaining, priorSummary = EMPTY_SUMMARY) => {
     };
 };
 
-export const foldTurn = (base, turnData, prefs, userAction, textStats) => {
+export const foldTurn = (base, turnData, prefs, userAction, textStats, mode = 'choice') => {
     const baseHistory = base.history || [];
     const newTurnIndex = baseHistory.length;
     const newCodex = mergeCodex(base.codex, turnData.codex_updates, newTurnIndex);
@@ -80,7 +80,9 @@ export const foldTurn = (base, turnData, prefs, userAction, textStats) => {
     }
     const newTurn = {
         narrative: turnData.narrative,
-        choices: Array.isArray(turnData.choices) ? turnData.choices.filter(Boolean).slice(0, 4) : [],
+        choices: mode === 'text'
+            ? []
+            : (Array.isArray(turnData.choices) ? turnData.choices.filter(Boolean).slice(0, 4) : []),
         summary_update: turnData.summary_update,
         image_prompt: turnData.image_prompt,
         scene: newScene,
@@ -176,6 +178,7 @@ export const processTurn = async (io, promptType, inputVal, base) => {
         stats: baseStats,
         scene: baseScene,
         styleCard,
+        pacing: prefs.pacing,
     });
     if (isEnding && promptType !== 'initial') systemPrompt += endingInstruction(turnsRemaining, config.mode);
 
@@ -184,7 +187,7 @@ export const processTurn = async (io, promptType, inputVal, base) => {
 
     try {
         const { data: turnData, stats: textStats } = await callGemini(textDeps(), modelPrompt, systemPrompt, {
-            schema: TURN_SCHEMA,
+            schema: buildTurnSchema(config.mode),
             stream: streaming,
             onPartialText: streaming ? (t) => setStreamingText(t) : undefined,
             signal,
@@ -197,6 +200,7 @@ export const processTurn = async (io, promptType, inputVal, base) => {
             prefs,
             userAction,
             textStats,
+            config.mode,
         );
 
         setCodex(folded.newCodex);
@@ -216,8 +220,11 @@ export const processTurn = async (io, promptType, inputVal, base) => {
 
         setIsStreaming(false); setStreamingText(''); setLoading(false);
 
-        const fetchImage = mediaStatus.images !== 'disabled';
-        const fetchAudio = mediaStatus.audio !== 'disabled' && prefs.autoPlay;
+        const live = getSnapshot();
+        const fetchImage = live.mediaStatus?.images !== 'disabled';
+        const fetchAudio = live.mediaStatus?.audio !== 'disabled' && !!live.prefs?.autoPlay;
+        const imageSaveId = live.currentSlotId || ACTIVE_SAVE_ID;
+        const keepLastN = live.prefs?.keepLastNImages || 0;
         setGeneratingAssets({ image: fetchImage, audio: fetchAudio });
         setStatus('Generating assets...');
 
@@ -238,15 +245,21 @@ export const processTurn = async (io, promptType, inputVal, base) => {
                     image: url,
                     stats: { ...turn.stats, image: imageResult.stats },
                 }));
-                if (blob && (prefs.keepLastNImages || 0) > 0) {
+                if (blob && keepLastN > 0) {
                     try {
-                        await putTurnImage(ACTIVE_SAVE_ID, folded.newTurnIndex, blob);
-                        await pruneTurnImages(ACTIVE_SAVE_ID, prefs.keepLastNImages);
+                        await putTurnImage(imageSaveId, folded.newTurnIndex, blob);
+                        await pruneTurnImages(imageSaveId, keepLastN);
+                        if (imageSaveId !== ACTIVE_SAVE_ID) {
+                            await putTurnImage(ACTIVE_SAVE_ID, folded.newTurnIndex, blob);
+                            await pruneTurnImages(ACTIVE_SAVE_ID, keepLastN);
+                        }
                     } catch { /* ignore quota */ }
                 }
+                if (!url) showToast('error', 'Could not generate the scene image.');
                 setGeneratingAssets((prev) => ({ ...prev, image: false }));
             }).catch((e) => {
                 if (isAbortError(e)) return;
+                showToast('error', `Image failed: ${e.message || 'unknown error'}`);
                 setGeneratingAssets((prev) => ({ ...prev, image: false }));
             });
         }
