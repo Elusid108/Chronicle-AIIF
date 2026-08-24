@@ -1,12 +1,13 @@
 import { EMPTY_SCENE, EMPTY_SUMMARY } from '../constants.js';
-import { callGemini, callGeminiText, generateImage, generateSpeech, isAbortError } from '../api/gemini.js';
-import { ACTIVE_SAVE_ID, pruneTurnImages, putTurnImage } from '../utils/idb.js';
-import { snapshotImage } from '../utils/images.js';
-import { normalizeSummary, summaryToText } from '../utils/storage.js';
+import { callGemini, callGeminiText, extractJsonStringField, generateImage, generateSpeech, isAbortError } from '../api/gemini.js';
+import { ACTIVE_SAVE_ID, getCodexImage, pruneTurnImages, putCodexImage, putTurnImage } from '../utils/idb.js';
+import { blobToInlineData, snapshotImage } from '../utils/images.js';
+import { normalizeEntry, normalizeSummary, summaryToText } from '../utils/storage.js';
 import {
-    appendBeat, applyCompaction, mergeCodex, mergeScene, scrubImagePrompt, splitBeatsForCompaction,
+    appendBeat, applyCompaction, diffNewCodexEntries, mergeCodex, mergeScene, pickCodexImageRefs,
+    scrubImagePrompt, splitBeatsForCompaction, visualForEntry,
 } from './memory.js';
-import { buildActionPrompt, buildSystemPrompt, buildTurnSchema, endingInstruction } from './prompt.js';
+import { buildActionPrompt, buildSystemPrompt, buildTurnSchema, endingInstruction, LORE_BACKFILL_SCHEMA, styleText } from './prompt.js';
 
 export { EMPTY_SCENE, EMPTY_SUMMARY };
 
@@ -21,6 +22,41 @@ export const startTurnSignal = (abortRef) => {
     abortActiveTurn(abortRef);
     const controller = new AbortController();
     abortRef.current = controller;
+    return controller.signal;
+};
+
+export const abortAssetSignal = (mapRef, jobKey) => {
+    if (!mapRef?.current || jobKey == null) return;
+    const controller = mapRef.current.get(jobKey);
+    if (!controller) return;
+    try { controller.abort(); } catch { /* ignore */ }
+    mapRef.current.delete(jobKey);
+};
+
+export const abortAllAssetSignals = (mapRef) => {
+    if (!mapRef?.current) return;
+    for (const controller of mapRef.current.values()) {
+        try { controller.abort(); } catch { /* ignore */ }
+    }
+    mapRef.current.clear();
+};
+
+export const completeAssetJob = (mapRef, jobKey) => {
+    if (!mapRef?.current || jobKey == null) return;
+    mapRef.current.delete(jobKey);
+};
+
+export const hasAssetJobs = (mapRef, prefix) => {
+    if (!mapRef?.current) return false;
+    return [...mapRef.current.keys()].some((key) => String(key).startsWith(prefix));
+};
+
+export const startAssetSignal = (mapRef, jobKey) => {
+    abortAssetSignal(mapRef, jobKey);
+    const controller = new AbortController();
+    if (!mapRef) return controller.signal;
+    if (!mapRef.current) mapRef.current = new Map();
+    mapRef.current.set(jobKey, controller);
     return controller.signal;
 };
 
@@ -126,15 +162,179 @@ export const runConsistencyCheck = async ({ apiKey, modelPrefs, scene, codex, na
     return callGeminiText({ apiKey, modelPrefs }, prompt, 'You are a continuity editor. Be terse.', { signal });
 };
 
-const patchTurnByNarrative = (setHistory, narrative, patcher) => {
+const patchTurnAt = (setHistory, index, patcher) => {
     setHistory((prev) => {
         const updated = [...prev];
-        const index = updated.length - 1;
-        if (updated[index] && updated[index].narrative === narrative) {
-            updated[index] = patcher(updated[index]);
-        }
+        if (updated[index] && updated[index].type === 'ai') updated[index] = patcher(updated[index]);
         return updated;
     });
+};
+
+export const persistTurnImageBlob = async (slotId, turnIndex, blob, keepLastN) => {
+    if (!blob || !keepLastN) return;
+    await putTurnImage(ACTIVE_SAVE_ID, turnIndex, blob);
+    await pruneTurnImages(ACTIVE_SAVE_ID, keepLastN);
+    if (slotId && slotId !== ACTIVE_SAVE_ID) {
+        await putTurnImage(slotId, turnIndex, blob);
+        await pruneTurnImages(slotId, keepLastN);
+    }
+};
+
+const persistCodexBlob = async (slotId, category, key, blob) => {
+    if (!blob) return;
+    await putCodexImage(ACTIVE_SAVE_ID, category, key, blob);
+    if (slotId && slotId !== ACTIVE_SAVE_ID) await putCodexImage(slotId, category, key, blob);
+};
+
+export const resolveImageReferences = async (codex, scene, narrative, slotId) => {
+    const picks = pickCodexImageRefs(codex, scene, narrative);
+    const out = [];
+    for (const pick of picks) {
+        try {
+            const blob = (slotId && await getCodexImage(slotId, pick.category, pick.key))
+                || await getCodexImage(ACTIVE_SAVE_ID, pick.category, pick.key);
+            if (!blob) continue;
+            const inline = await blobToInlineData(blob);
+            if (inline) out.push({ label: pick.label, mime: inline.mime, data: inline.data });
+        } catch { /* ignore */ }
+    }
+    return out;
+};
+
+const portraitPromptFor = (category, key, data, config) => {
+    const visual = visualForEntry(key, data);
+    const style = styleText(config || {});
+    if (category === 'characters') {
+        return `${style}. Character reference portrait, bust, face clearly visible, plain backdrop. Subject: ${visual}.`;
+    }
+    if (category === 'places') {
+        return `${style}. Location reference establishing shot. Place: ${visual}.`;
+    }
+    return `${style}. Object reference still, centered, plain backdrop. Item: ${visual}.`;
+};
+
+export const generateEntryPortrait = async (io, { category, key, data, signal }) => {
+    const { imageDeps, getSnapshot, setCodex, setSelectedCodexEntry } = io;
+    const snap = getSnapshot();
+    if (snap.mediaStatus?.images === 'disabled') return;
+    const liveData = data || snap.codex?.[category]?.[key];
+    if (!liveData) return;
+    const result = await generateImage(imageDeps(), portraitPromptFor(category, key, liveData, snap.config), { signal });
+    if (signal?.aborted || !result.image) return;
+    const snapshotted = await snapshotImage(result.image);
+    if (signal?.aborted || !snapshotted.url) return;
+    const slotId = snap.currentSlotId || ACTIVE_SAVE_ID;
+    if (snapshotted.blob) {
+        try { await persistCodexBlob(slotId, category, key, snapshotted.blob); } catch { /* ignore */ }
+    }
+    setCodex((prev) => {
+        if (!prev[category]?.[key]) return prev;
+        const current = normalizeEntry(prev[category][key]);
+        const nextEntry = { ...current, hasPortrait: true, portraitUrl: snapshotted.url };
+        const next = { ...prev, [category]: { ...prev[category], [key]: nextEntry } };
+        if (setSelectedCodexEntry) {
+            setSelectedCodexEntry((sel) => (
+                sel && sel.category === category && sel.title === key ? { ...sel, data: nextEntry } : sel
+            ));
+        }
+        return next;
+    });
+};
+
+export const generateMissingPortraits = async (io, entries, signal, codexHint) => {
+    for (const row of entries || []) {
+        if (signal?.aborted) return;
+        const live = io.getSnapshot();
+        const data = codexHint?.[row.cat]?.[row.key] || live.codex?.[row.cat]?.[row.key];
+        if (!data || data.portraitUrl) continue;
+        const slotId = live.currentSlotId || ACTIVE_SAVE_ID;
+        try {
+            const blob = await getCodexImage(slotId, row.cat, row.key) || await getCodexImage(ACTIVE_SAVE_ID, row.cat, row.key);
+            if (blob) {
+                const url = URL.createObjectURL(blob);
+                io.setCodex((prev) => {
+                    if (!prev[row.cat]?.[row.key]) return prev;
+                    const nextEntry = { ...normalizeEntry(prev[row.cat][row.key]), hasPortrait: true, portraitUrl: url };
+                    if (io.setSelectedCodexEntry) {
+                        io.setSelectedCodexEntry((sel) => (
+                            sel && sel.category === row.cat && sel.title === row.key ? { ...sel, data: nextEntry } : sel
+                        ));
+                    }
+                    return { ...prev, [row.cat]: { ...prev[row.cat], [row.key]: nextEntry } };
+                });
+                continue;
+            }
+        } catch { /* generate */ }
+        try {
+            await generateEntryPortrait(io, { category: row.cat, key: row.key, data, signal });
+        } catch (e) {
+            if (isAbortError(e)) return;
+        }
+    }
+};
+
+const prepareSceneImageRefs = async (io, codex, scene, narrative, slotId, signal) => {
+    const wanted = pickCodexImageRefs(codex, scene, narrative, 10, { allowMissing: true });
+    if (wanted.length && io) {
+        await generateMissingPortraits(io, wanted.map((p) => ({ cat: p.category, key: p.key })), signal, codex);
+    }
+    const liveCodex = io?.getSnapshot?.()?.codex || codex;
+    return resolveImageReferences(liveCodex, scene, narrative, slotId);
+};
+
+const backfillCodexFromNarrative = async (deps, { narrative, codex, signal }) => {
+    const keys = [];
+    for (const cat of ['characters', 'places', 'items']) {
+        for (const key of Object.keys(codex?.[cat] || {})) keys.push(`${cat}: ${key}`);
+    }
+    const prompt = `Extract lore that appears in this narrative but is missing from the known list. Include significant unnamed objects the player found, picked up, or clearly saw (a plasma cutter, a locked journal, a keycard). Return codex_updates only for NEW or newly detailed entities. Do not repeat known keys.\n\nKNOWN:\n${keys.join('\n') || '(none)'}\n\nNARRATIVE:\n${narrative}`;
+    const { data } = await callGemini({ ...deps, setStatus: undefined }, prompt, 'You extract story lore as JSON. Be thorough about items and people that appear this turn.', {
+        schema: LORE_BACKFILL_SCHEMA,
+        stream: false,
+        signal,
+    });
+    return Array.isArray(data?.codex_updates) ? data.codex_updates : [];
+};
+
+export const attachSceneImage = async ({
+    io, imageDeps, prompt, codex, scene, narrative, slotId, keepLastN, turnIndex, setHistory, signal, showToast, setGeneratingAssets, assetAbortMap,
+}) => {
+    const finish = () => {
+        completeAssetJob(assetAbortMap, `scene:${turnIndex}`);
+        if (!hasAssetJobs(assetAbortMap, 'scene:')) {
+            setGeneratingAssets && setGeneratingAssets((prev) => ({ ...prev, image: false }));
+        }
+    };
+    try {
+        const deps = typeof imageDeps === 'function' ? imageDeps() : imageDeps;
+        const scrubbed = scrubImagePrompt(prompt, codex);
+        const references = await prepareSceneImageRefs(io, codex, scene, narrative, slotId, signal);
+        const imageResult = await generateImage(deps, scrubbed, { signal, references });
+        if (signal?.aborted) {
+            return;
+        }
+        let url = imageResult.image;
+        let blob = null;
+        if (url) {
+            const snapshotted = await snapshotImage(url);
+            if (signal?.aborted) {
+                return;
+            }
+            url = snapshotted.url || url;
+            blob = snapshotted.blob;
+        }
+        patchTurnAt(setHistory, turnIndex, (turn) => ({
+            ...turn,
+            image: url,
+            stats: { ...turn.stats, image: imageResult.stats },
+        }));
+        if (blob && keepLastN > 0) {
+            try { await persistTurnImageBlob(slotId, turnIndex, blob, keepLastN); } catch { /* ignore quota */ }
+        }
+        if (!url && showToast) showToast('error', 'Could not generate the scene image.');
+    } finally {
+        finish();
+    }
 };
 
 /**
@@ -142,10 +342,10 @@ const patchTurnByNarrative = (setHistory, narrative, patcher) => {
  */
 export const processTurn = async (io, promptType, inputVal, base) => {
     const {
-        abortRef, getSnapshot, stopAudio, showToast,
+        abortRef, assetAbortMap, getSnapshot, stopAudio, showToast,
         setView, setLoading, setIsStreaming, setStreamingText, setStatus, setToast,
         setCodex, setSummary, setStats, setScene, setStyleCard, setHistory, setCurrentSlideIndex,
-        setGeneratingAssets, setTurnsRemaining, setIsFinished, setExportDetails, setUserInput,
+        setGeneratingAssets, setTurnsRemaining, setIsFinished, setIsEnding, setExportDetails, setUserInput,
         textDeps, imageDeps, speechDeps,
     } = io;
 
@@ -155,7 +355,7 @@ export const processTurn = async (io, promptType, inputVal, base) => {
     const baseSummary = base?.summary ?? snap.summary;
     const baseStats = base?.stats ?? snap.stats;
     const baseScene = base?.scene ?? snap.scene;
-    const { config, initialContext, prefs, isEnding, turnsRemaining, mediaStatus, apiKey, modelPrefs, styleCard } = snap;
+    const { config, initialContext, prefs, isEnding, turnsRemaining, apiKey, modelPrefs, styleCard } = snap;
 
     const signal = startTurnSignal(abortRef);
     const myController = abortRef.current;
@@ -184,12 +384,76 @@ export const processTurn = async (io, promptType, inputVal, base) => {
 
     const modelPrompt = promptType === 'initial' ? inputVal : buildActionPrompt(inputVal);
     const userAction = promptType === 'initial' ? null : inputVal;
+    const turnIndex = baseHistory.length;
+    const wantImage = snap.mediaStatus?.images !== 'disabled';
+    let imageStarted = false;
+    let historyReady = false;
+    let pendingImage = null;
+
+    const applyPendingImage = () => {
+        if (!pendingImage || !historyReady) return;
+        const result = pendingImage;
+        pendingImage = null;
+        patchTurnAt(setHistory, turnIndex, (turn) => ({
+            ...turn,
+            image: result.url,
+            stats: { ...turn.stats, image: result.stats },
+        }));
+        if (result.blob && result.keepLastN > 0) {
+            persistTurnImageBlob(result.slotId, turnIndex, result.blob, result.keepLastN).catch(() => {});
+        }
+        if (!result.url) showToast('error', 'Could not generate the scene image.');
+    };
+
+    const startSceneImage = (prompt, codexForRefs, sceneForRefs, narrative) => {
+        if (imageStarted || !wantImage || !prompt) return;
+        imageStarted = true;
+        const live = getSnapshot();
+        const slotId = live.currentSlotId || ACTIVE_SAVE_ID;
+        const keepLastN = live.prefs?.keepLastNImages || 0;
+        const imageSignal = startAssetSignal(assetAbortMap, `scene:${turnIndex}`);
+        setGeneratingAssets((prev) => ({ ...prev, image: true }));
+        const finishImage = () => {
+            completeAssetJob(assetAbortMap, `scene:${turnIndex}`);
+            if (!hasAssetJobs(assetAbortMap, 'scene:')) {
+                setGeneratingAssets((prev) => ({ ...prev, image: false }));
+            }
+        };
+        (async () => {
+            try {
+                const scrubbed = scrubImagePrompt(prompt, codexForRefs);
+                const references = await prepareSceneImageRefs(io, codexForRefs, sceneForRefs, narrative, slotId, imageSignal);
+                if (imageSignal.aborted) return;
+                const imageResult = await generateImage(imageDeps(), scrubbed, { signal: imageSignal, references });
+                if (imageSignal.aborted) return;
+                let url = imageResult.image;
+                let blob = null;
+                if (url) {
+                    const snapshotted = await snapshotImage(url);
+                    if (imageSignal.aborted) return;
+                    url = snapshotted.url || url;
+                    blob = snapshotted.blob;
+                }
+                pendingImage = { url, blob, stats: imageResult.stats, slotId, keepLastN };
+                applyPendingImage();
+            } catch (e) {
+                if (isAbortError(e)) return;
+                showToast('error', `Image failed: ${e.message || 'unknown error'}`);
+            } finally {
+                finishImage();
+            }
+        })();
+    };
 
     try {
         const { data: turnData, stats: textStats } = await callGemini(textDeps(), modelPrompt, systemPrompt, {
             schema: buildTurnSchema(config.mode),
             stream: streaming,
             onPartialText: streaming ? (t) => setStreamingText(t) : undefined,
+            onPartialBuffer: streaming ? (buf) => {
+                const prompt = extractJsonStringField(buf, 'image_prompt', { completeOnly: true });
+                if (prompt) startSceneImage(prompt, baseCodex, baseScene, extractJsonStringField(buf, 'narrative') || '');
+            } : undefined,
             signal,
         });
         if (signal.aborted) return;
@@ -211,7 +475,7 @@ export const processTurn = async (io, promptType, inputVal, base) => {
         if (promptType === 'initial') {
             setCurrentSlideIndex(0);
             setView('game');
-            setIsEnding(false);
+            if (setIsEnding) setIsEnding(false);
             setTurnsRemaining(null);
             setIsFinished(false);
         } else {
@@ -219,63 +483,31 @@ export const processTurn = async (io, promptType, inputVal, base) => {
         }
 
         setIsStreaming(false); setStreamingText(''); setLoading(false);
+        historyReady = true;
+        applyPendingImage();
 
         const live = getSnapshot();
         const fetchImage = live.mediaStatus?.images !== 'disabled';
         const fetchAudio = live.mediaStatus?.audio !== 'disabled' && !!live.prefs?.autoPlay;
-        const imageSaveId = live.currentSlotId || ACTIVE_SAVE_ID;
-        const keepLastN = live.prefs?.keepLastNImages || 0;
-        setGeneratingAssets({ image: fetchImage, audio: fetchAudio });
-        setStatus('Generating assets...');
-
-        if (fetchImage) {
-            const scrubbed = scrubImagePrompt(turnData.image_prompt, folded.newCodex);
-            generateImage(imageDeps(), scrubbed, { signal }).then(async (imageResult) => {
-                if (signal.aborted) return;
-                let url = imageResult.image;
-                let blob = null;
-                if (url) {
-                    const snapshotted = await snapshotImage(url);
-                    if (signal.aborted) return;
-                    url = snapshotted.url || url;
-                    blob = snapshotted.blob;
-                }
-                patchTurnByNarrative(setHistory, folded.newTurn.narrative, (turn) => ({
-                    ...turn,
-                    image: url,
-                    stats: { ...turn.stats, image: imageResult.stats },
-                }));
-                if (blob && keepLastN > 0) {
-                    try {
-                        await putTurnImage(imageSaveId, folded.newTurnIndex, blob);
-                        await pruneTurnImages(imageSaveId, keepLastN);
-                        if (imageSaveId !== ACTIVE_SAVE_ID) {
-                            await putTurnImage(ACTIVE_SAVE_ID, folded.newTurnIndex, blob);
-                            await pruneTurnImages(ACTIVE_SAVE_ID, keepLastN);
-                        }
-                    } catch { /* ignore quota */ }
-                }
-                if (!url) showToast('error', 'Could not generate the scene image.');
-                setGeneratingAssets((prev) => ({ ...prev, image: false }));
-            }).catch((e) => {
-                if (isAbortError(e)) return;
-                showToast('error', `Image failed: ${e.message || 'unknown error'}`);
-                setGeneratingAssets((prev) => ({ ...prev, image: false }));
-            });
+        if (!imageStarted && fetchImage) {
+            startSceneImage(turnData.image_prompt, baseCodex, folded.newScene, folded.newTurn.narrative);
         }
+        if (!fetchImage) setGeneratingAssets((prev) => ({ ...prev, image: false }));
+        setGeneratingAssets((prev) => ({ ...prev, audio: fetchAudio }));
+        setStatus('Generating assets...');
 
         if (fetchAudio && turnData.narrative) {
             generateSpeech(speechDeps(), turnData.narrative, null, { signal }).then((audioResult) => {
                 if (signal.aborted) return;
-                patchTurnByNarrative(setHistory, folded.newTurn.narrative, (turn) => ({
+                patchTurnAt(setHistory, folded.newTurnIndex, (turn) => ({
                     ...turn,
                     audio: audioResult.audio,
                     stats: { ...turn.stats, audio: audioResult.stats },
                 }));
                 setGeneratingAssets((prev) => ({ ...prev, audio: false }));
             }).catch((e) => {
-                if (isAbortError(e)) return;
                 setGeneratingAssets((prev) => ({ ...prev, audio: false }));
+                if (isAbortError(e)) return;
             });
         }
 
@@ -296,6 +528,30 @@ export const processTurn = async (io, promptType, inputVal, base) => {
                 showToast('info', `Continuity: ${trimmed.slice(0, 180)}`);
             }).catch(() => { /* ignore */ });
         }
+
+        const loreSignal = startAssetSignal(assetAbortMap, `lore:${folded.newTurnIndex}`);
+        backfillCodexFromNarrative(textDeps(), {
+            narrative: folded.newTurn.narrative,
+            codex: folded.newCodex,
+            signal: loreSignal,
+        }).then((extra) => {
+            if (loreSignal.aborted || !extra.length) return;
+            const prev = getSnapshot().codex;
+            const merged = mergeCodex(prev, extra, folded.newTurnIndex);
+            const newcomers = diffNewCodexEntries(prev, merged);
+            setCodex(merged);
+            patchTurnAt(setHistory, folded.newTurnIndex, (turn) => ({
+                ...turn,
+                codex_updates: [...(turn.codex_updates || []), ...extra],
+            }));
+            const portraitSignal = startAssetSignal(assetAbortMap, `portraits:${folded.newTurnIndex}:late`);
+            generateMissingPortraits(io, newcomers, portraitSignal, merged);
+        }).catch((e) => {
+            if (isAbortError(e)) return;
+        });
+
+        const portraitSignal = startAssetSignal(assetAbortMap, `portraits:${folded.newTurnIndex}`);
+        generateMissingPortraits(io, diffNewCodexEntries(baseCodex, folded.newCodex), portraitSignal, folded.newCodex);
 
         if (isEnding && promptType !== 'initial') {
             const nextTurns = turnsRemaining - 1;
@@ -320,7 +576,6 @@ export const processTurn = async (io, promptType, inputVal, base) => {
         if (isAbortError(error)) {
             if (abortRef.current && abortRef.current !== myController) return;
             setLoading(false); setIsStreaming(false); setStreamingText('');
-            setGeneratingAssets({ image: false, audio: false });
             setStatus('');
             return;
         }

@@ -1,7 +1,7 @@
 import { html } from '../html.js';
-import { BookOpen, FileText, X, Clock, Image as ImageIcon, Activity, Server, Mic, CheckCircle, CornerDownRight, Book, User as UserIcon, MapPin, Box, Bookmark, Save } from 'lucide-react';
+import { BookOpen, FileText, X, Clock, Image as ImageIcon, Activity, Server, Mic, CheckCircle, CornerDownRight, Book, User as UserIcon, MapPin, Box, Bookmark } from 'lucide-react';
 import { summaryToText } from '../utils/storage.js';
-import { Button, Input } from './ui.js';
+import { Button } from './ui.js';
 
 const CODEX_GROUPS = [
     { title: 'People', bg: 'bg-blue-900/30', text: 'text-blue-400', key: 'characters' },
@@ -69,7 +69,10 @@ export function SidePanel({ app }) {
                                         ${list.map(([name, data]) => html`
                                             <div key=${name} onClick=${() => setSelectedCodexEntry({ title: name, data, category: group.key })} className="bg-gray-900/50 p-2 rounded border border-gray-800/50 hover:border-blue-900/50 hover:bg-gray-900 transition-all cursor-pointer group">
                                                 <div className="text-xs font-bold text-gray-300 group-hover:text-blue-300 transition-colors flex justify-between items-center">
-                                                    <span className="truncate">${name}</span>
+                                                    <span className="truncate flex items-center gap-2 min-w-0">
+                                                        ${data && data.portraitUrl && html`<img src=${data.portraitUrl} alt="" className="w-6 h-6 rounded object-cover shrink-0 border border-gray-700" />`}
+                                                        <span className="truncate">${name}</span>
+                                                    </span>
                                                     <span className="flex items-center gap-1 shrink-0">
                                                         ${data && data.pinned && html`<${Bookmark} size=${10} className="text-blue-400" />`}
                                                         ${data && data.source === 'player' && html`<span className="text-[8px] text-amber-400 uppercase">you</span>`}
@@ -114,22 +117,34 @@ export function SidePanel({ app }) {
 }
 
 export function CodexEntryModal({ app }) {
-    const { selectedCodexEntry, setSelectedCodexEntry, setCurrentSlideIndex, togglePanel, saveCodexEdits, toggleCodexPin, mergeSelectedInto, codex } = app;
+    const { selectedCodexEntry, setSelectedCodexEntry, setCurrentSlideIndex, togglePanel, toggleCodexPin, mergeSelectedInto, codex } = app;
     if (!selectedCodexEntry) return null;
     const { category, title, data } = selectedCodexEntry;
-    const entry = data && typeof data === 'object' ? data : { description: String(data || ''), citations: [], aliases: [], status: '', location: '', pinned: false, source: 'model' };
+    const live = codex?.[category]?.[title];
+    const entry = (live && typeof live === 'object')
+        ? live
+        : (data && typeof data === 'object' ? data : { description: String(data || ''), citations: [], aliases: [], status: '', location: '', pinned: false, source: 'model', visual: '', portraitUrl: '' });
     const citations = entry.citations || [];
     const others = Object.keys(codex[category] || {}).filter((k) => k !== title);
-
-    const onField = (field) => (e) => {
-        const value = e.target.value;
-        saveCodexEdits(category, title, { [field]: value });
-    };
+    const field = (label, value) => value ? html`
+        <div>
+            <label className="text-[10px] uppercase text-gray-500 font-bold block mb-1">${label}</label>
+            <div className="text-sm text-gray-300 font-serif leading-relaxed whitespace-pre-wrap">${value}</div>
+        </div>
+    ` : null;
 
     return html`
         <div className="absolute inset-0 bg-black/80 flex items-center justify-center z-[60] p-6 backdrop-blur-sm" onClick=${() => setSelectedCodexEntry(null)}>
             <div className="w-full max-w-md bg-gray-900 border border-gray-700 rounded-xl p-6 shadow-2xl relative max-h-[90vh] overflow-y-auto custom-scrollbar" onClick=${(e) => e.stopPropagation()}>
                 <button onClick=${() => setSelectedCodexEntry(null)} className="absolute top-4 right-4 text-gray-500 hover:text-white"><${X} size=${20} /></button>
+                <div className="w-full aspect-video bg-black/60 border border-gray-800 rounded-lg overflow-hidden mb-4 flex items-center justify-center">
+                    ${entry.portraitUrl ? html`<img src=${entry.portraitUrl} alt=${title} className="w-full h-full object-cover" />` : html`
+                        <div className="flex flex-col items-center gap-2 text-gray-600">
+                            <${ImageIcon} size=${28} />
+                            <span className="text-[10px] uppercase tracking-widest">Generating reference...</span>
+                        </div>
+                    `}
+                </div>
                 <div className="flex items-center gap-3 mb-4 text-blue-400">
                     ${category === 'characters' && html`<${UserIcon} size=${24} />`}
                     ${category === 'places' && html`<${MapPin} size=${24} />`}
@@ -137,24 +152,13 @@ export function CodexEntryModal({ app }) {
                     <h3 className="text-xl font-bold text-white font-display uppercase tracking-wider">${title}</h3>
                 </div>
                 <div className="space-y-3 mb-4">
-                    <div>
-                        <label className="text-[10px] uppercase text-gray-500 font-bold block mb-1">Description</label>
-                        <textarea value=${entry.description || ''} onChange=${onField('description')} className="w-full bg-black/50 border border-gray-700 rounded p-2 text-sm text-gray-300 h-24 resize-none focus:outline-none focus:border-blue-500 font-serif" />
-                    </div>
+                    ${field('Description', entry.description)}
+                    ${entry.visual && field('Appearance', entry.visual)}
                     <div className="grid grid-cols-2 gap-2">
-                        <div>
-                            <label className="text-[10px] uppercase text-gray-500 font-bold block mb-1">Status</label>
-                            <${Input} value=${entry.status || ''} onChange=${onField('status')} placeholder="alive, dead..." className="bg-black/50" />
-                        </div>
-                        <div>
-                            <label className="text-[10px] uppercase text-gray-500 font-bold block mb-1">Location</label>
-                            <${Input} value=${entry.location || ''} onChange=${onField('location')} placeholder="where they are" className="bg-black/50" />
-                        </div>
+                        ${field('Status', entry.status)}
+                        ${field('Location', entry.location)}
                     </div>
-                    <div>
-                        <label className="text-[10px] uppercase text-gray-500 font-bold block mb-1">Aliases (comma-separated)</label>
-                        <${Input} value=${(entry.aliases || []).join(', ')} onChange=${onField('aliases')} placeholder="Captain, the stranger" className="bg-black/50" />
-                    </div>
+                    ${(entry.aliases || []).length > 0 && field('Aliases', (entry.aliases || []).join(', '))}
                     <div className="flex gap-2">
                         <${Button} variant="secondary" onClick=${() => toggleCodexPin(category, title)} className="flex-1 text-xs">
                             <${Bookmark} size=${12} /> ${entry.pinned ? 'Unpin' : 'Pin in prompt'}
@@ -179,7 +183,6 @@ export function CodexEntryModal({ app }) {
                         </div>
                     </div>
                 `}
-                <p className="text-[9px] text-gray-600 mt-3 flex items-center gap-1"><${Save} size=${10} /> Edits are marked canonical and always injected into the GM prompt.</p>
             </div>
         </div>
     `;

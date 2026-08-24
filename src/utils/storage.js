@@ -1,7 +1,12 @@
-import { DEFAULT_CONFIG, DEFAULT_CODEX, EMPTY_SCENE, EMPTY_SUMMARY, INITIAL_SUMMARY } from '../constants.js';
 import {
-    ACTIVE_SAVE_ID, copyImages, deleteImagesForSave, getTurnImage, idbDelete, idbGet, idbPut,
+    CODEX_DESC_LIMIT, CODEX_VISUAL_LIMIT, DEFAULT_CONFIG, DEFAULT_CODEX, EMPTY_SCENE, EMPTY_SUMMARY,
+    INITIAL_SUMMARY, SCENE_FIELD_LIMITS,
+} from '../constants.js';
+import {
+    ACTIVE_SAVE_ID, copyCodexImages, copyImages, deleteCodexImagesForSave, deleteImagesForSave,
+    getCodexImage, getTurnImage, idbDelete, idbGet, idbPut,
 } from './idb.js';
+import { revokeIfBlobUrl } from './images.js';
 
 export const STORAGE_KEYS = {
     apiKey: 'chronicle_api_key',
@@ -37,30 +42,102 @@ export const saveJSON = (key, value) => {
     }
 };
 
-export const normalizeEntry = (val) => {
-    if (typeof val === 'string') {
-        return { description: val, citations: [], aliases: [], status: '', location: '', source: 'model', pinned: false };
+export const sanitizeSceneString = (value, maxLen = 200) => {
+    let s = String(value || '').replace(/\s+/g, ' ').trim();
+    if (!s) return '';
+    const meta = s.search(/\bLet's (?:clean|keep)\b/i);
+    if (meta > 0) s = s.slice(0, meta).trim();
+    else if (meta === 0) {
+        const parts = s.split(/\bLet's (?:clean|keep)[^:]*:\s*/i).map((p) => p.trim()).filter(Boolean);
+        s = (parts[parts.length - 1] || '').trim();
     }
-    const data = val && typeof val === 'object' ? val : {};
+    const sentences = s.split(/(?<=[.!?])\s+/);
+    const out = [];
+    for (const sent of sentences) {
+        if (!sent) continue;
+        if (out.length && out[out.length - 1] === sent) continue;
+        out.push(sent);
+    }
+    s = out.join(' ');
+    const repeated = s.match(/(.{16,}?)\1{2,}/);
+    if (repeated) s = s.slice(0, s.indexOf(repeated[1]) + repeated[1].length).trim();
+    if (s.length > maxLen) {
+        s = s.slice(0, maxLen);
+        const clipped = s.lastIndexOf(' ');
+        if (clipped > maxLen * 0.6) s = s.slice(0, clipped);
+        s = s.trim();
+    }
+    return s;
+};
+
+const uniqCap = (arr, maxItems, maxLen) => {
+    const seen = new Set();
+    const out = [];
+    for (const raw of Array.isArray(arr) ? arr : []) {
+        const s = sanitizeSceneString(raw, maxLen);
+        if (!s) continue;
+        const k = s.toLowerCase();
+        if (seen.has(k)) continue;
+        seen.add(k);
+        out.push(s);
+        if (out.length >= maxItems) break;
+    }
+    return out;
+};
+
+export const persistableEntry = (val) => {
+    const n = normalizeEntry(val);
     return {
-        description: typeof data.description === 'string' ? data.description : '',
-        citations: Array.isArray(data.citations) ? data.citations.slice() : [],
-        aliases: Array.isArray(data.aliases) ? data.aliases.map(String).filter(Boolean) : [],
-        status: typeof data.status === 'string' ? data.status : '',
-        location: typeof data.location === 'string' ? data.location : '',
-        source: data.source === 'player' ? 'player' : 'model',
-        pinned: Boolean(data.pinned),
+        description: n.description,
+        citations: n.citations,
+        aliases: n.aliases,
+        status: n.status,
+        location: n.location,
+        source: n.source,
+        pinned: n.pinned,
+        visual: n.visual,
+        hasPortrait: n.hasPortrait,
     };
 };
 
-export const normalizeCodex = (codex) => {
+export const normalizeEntry = (val) => {
+    if (typeof val === 'string') {
+        return {
+            description: sanitizeSceneString(val, CODEX_DESC_LIMIT),
+            citations: [],
+            aliases: [],
+            status: '',
+            location: '',
+            source: 'model',
+            pinned: false,
+            visual: '',
+            hasPortrait: false,
+            portraitUrl: '',
+        };
+    }
+    const data = val && typeof val === 'object' ? val : {};
+    return {
+        description: sanitizeSceneString(typeof data.description === 'string' ? data.description : '', CODEX_DESC_LIMIT),
+        citations: Array.isArray(data.citations) ? data.citations.slice() : [],
+        aliases: Array.isArray(data.aliases) ? data.aliases.map(String).filter(Boolean) : [],
+        status: sanitizeSceneString(typeof data.status === 'string' ? data.status : '', 80),
+        location: sanitizeSceneString(typeof data.location === 'string' ? data.location : '', 120),
+        source: data.source === 'player' ? 'player' : 'model',
+        pinned: Boolean(data.pinned),
+        visual: sanitizeSceneString(typeof data.visual === 'string' ? data.visual : '', CODEX_VISUAL_LIMIT),
+        hasPortrait: Boolean(data.hasPortrait),
+        portraitUrl: typeof data.portraitUrl === 'string' ? data.portraitUrl : '',
+    };
+};
+
+export const normalizeCodex = (codex, persistable = false) => {
     const src = codex && typeof codex === 'object' ? codex : { ...DEFAULT_CODEX };
     const out = { characters: {}, places: {}, items: {} };
     for (const cat of ['characters', 'places', 'items']) {
         const bucket = src[cat] && typeof src[cat] === 'object' ? src[cat] : {};
         for (const [key, val] of Object.entries(bucket)) {
             if (!key) continue;
-            out[cat][key] = normalizeEntry(val);
+            out[cat][key] = persistable ? persistableEntry(val) : normalizeEntry(val);
         }
     }
     return out;
@@ -69,11 +146,11 @@ export const normalizeCodex = (codex) => {
 export const normalizeScene = (scene) => {
     const s = scene && typeof scene === 'object' ? scene : {};
     return {
-        location: typeof s.location === 'string' ? s.location : '',
-        time_of_day: typeof s.time_of_day === 'string' ? s.time_of_day : '',
-        present_characters: Array.isArray(s.present_characters) ? s.present_characters.map(String) : [],
-        goal: typeof s.goal === 'string' ? s.goal : '',
-        open_threads: Array.isArray(s.open_threads) ? s.open_threads.map(String) : [],
+        location: sanitizeSceneString(s.location, SCENE_FIELD_LIMITS.location),
+        time_of_day: sanitizeSceneString(s.time_of_day, SCENE_FIELD_LIMITS.time_of_day),
+        present_characters: uniqCap(s.present_characters, 12, SCENE_FIELD_LIMITS.present_character),
+        goal: sanitizeSceneString(s.goal, SCENE_FIELD_LIMITS.goal),
+        open_threads: uniqCap(s.open_threads, 6, SCENE_FIELD_LIMITS.open_thread),
     };
 };
 
@@ -117,7 +194,7 @@ export const migrateSave = (data) => {
     const history = data.history.map(stripTurnMedia);
     return {
         history,
-        codex: normalizeCodex(data.codex),
+        codex: normalizeCodex(data.codex, true),
         summary: normalizeSummary(data.summary != null ? data.summary : INITIAL_SUMMARY),
         scene: normalizeScene(data.scene),
         styleCard: typeof data.styleCard === 'string' ? data.styleCard : '',
@@ -137,7 +214,7 @@ export const migrateSave = (data) => {
 export const buildSavePayload = (state) => ({
     version: SAVE_VERSION,
     history: (state.history || []).map(stripTurnMedia),
-    codex: normalizeCodex(state.codex),
+    codex: normalizeCodex(state.codex, true),
     summary: normalizeSummary(state.summary),
     scene: normalizeScene(state.scene),
     styleCard: typeof state.styleCard === 'string' ? state.styleCard : '',
@@ -250,6 +327,7 @@ export const writeActiveSave = async (state) => {
 export const clearActiveSave = async () => {
     try { await idbDelete('saves', ACTIVE_SAVE_ID); } catch { /* ignore */ }
     try { await deleteImagesForSave(ACTIVE_SAVE_ID); } catch { /* ignore */ }
+    try { await deleteCodexImagesForSave(ACTIVE_SAVE_ID); } catch { /* ignore */ }
     try { localStorage.removeItem(STORAGE_KEYS.save); } catch { /* ignore */ }
 };
 
@@ -268,6 +346,28 @@ export const attachStoredImages = async (save, saveId = ACTIVE_SAVE_ID) => {
         return { ...turn, image: null };
     }));
     return { ...save, history };
+};
+
+export const attachCodexPortraits = async (codex, saveId = ACTIVE_SAVE_ID) => {
+    const src = normalizeCodex(codex);
+    for (const cat of ['characters', 'places', 'items']) {
+        for (const [key, data] of Object.entries(src[cat] || {})) {
+            if (data.portraitUrl) continue;
+            try {
+                const blob = (saveId && await getCodexImage(saveId, cat, key))
+                    || await getCodexImage(ACTIVE_SAVE_ID, cat, key);
+                if (blob) src[cat][key] = { ...data, portraitUrl: URL.createObjectURL(blob), hasPortrait: true };
+            } catch { /* ignore */ }
+        }
+    }
+    return src;
+};
+
+export const revokeCodexPortraits = (codex) => {
+    const src = codex && typeof codex === 'object' ? codex : {};
+    for (const cat of ['characters', 'places', 'items']) {
+        for (const val of Object.values(src[cat] || {})) revokeIfBlobUrl(val?.portraitUrl);
+    }
 };
 
 export const listSlots = async () => {
@@ -304,6 +404,7 @@ export const createStorySlot = async (state, keepLastNImages = 0) => {
     const entry = slotMetaFromState(id, state);
     await idbPut('saves', payload, id);
     try { await copyImages(ACTIVE_SAVE_ID, id, keepLastNImages); } catch { /* ignore */ }
+    try { await copyCodexImages(ACTIVE_SAVE_ID, id); } catch { /* ignore */ }
     const prev = await listSlots();
     await writeSlotIndex([entry, ...prev.filter((s) => s.id !== id)]);
     await setCurrentSlotId(id);
@@ -315,6 +416,7 @@ export const writeStorySlot = async (id, state, keepLastNImages = 0) => {
     const payload = buildSavePayload(state);
     await idbPut('saves', payload, id);
     try { await copyImages(ACTIVE_SAVE_ID, id, keepLastNImages); } catch { /* ignore */ }
+    try { await copyCodexImages(ACTIVE_SAVE_ID, id); } catch { /* ignore */ }
     const prev = await listSlots();
     const existing = prev.find((s) => s.id === id) || null;
     const entry = slotMetaFromState(id, state, existing);
@@ -352,6 +454,7 @@ export const saveToSlot = async (name, state, keepLastNImages = 0) => {
 export const deleteSlot = async (id) => {
     try { await idbDelete('saves', id); } catch { /* ignore */ }
     try { await deleteImagesForSave(id); } catch { /* ignore */ }
+    try { await deleteCodexImagesForSave(id); } catch { /* ignore */ }
     const current = await getCurrentSlotId();
     if (current === id) await setCurrentSlotId(null);
     const next = (await listSlots()).filter((s) => s.id !== id);
@@ -372,7 +475,9 @@ export const loadSlot = async (id) => {
     const data = await idbGet('saves', id);
     const migrated = migrateSave(data);
     if (!migrated) return null;
-    return attachStoredImages(migrated, id);
+    const withImages = await attachStoredImages(migrated, id);
+    const codex = await attachCodexPortraits(withImages.codex, id);
+    return { ...withImages, codex };
 };
 
 export const exportStoryFile = (state) => {

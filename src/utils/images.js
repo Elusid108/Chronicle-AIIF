@@ -57,3 +57,15 @@ export const revokeHistoryImages = (history) => {
     if (!Array.isArray(history)) return;
     for (const turn of history) revokeIfBlobUrl(turn?.image);
 };
+
+export const blobToInlineData = async (blob) => {
+    if (!blob) return null;
+    const buf = await blob.arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    let binary = '';
+    const chunk = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunk) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+    }
+    return { mime: blob.type || 'image/webp', data: btoa(binary) };
+};

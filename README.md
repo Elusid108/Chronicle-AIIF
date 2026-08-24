@@ -1,7 +1,7 @@
 # Chronicle: Iterative Fiction Engine
 > A serverless, AI-driven interactive fiction engine that generates cohesive narratives, dynamic scene illustrations, and fully voiced dialogue in real time.
 
-**v3.1.1** — exclusive text vs choice input, play layout sized to the visible mobile viewport, and Pacing (Standard / Direct).
+**v3.2.0** — first-page image fix, Current Scene sanitizer, same-turn lore backfill, and read-only Codex portraits used as image references.
 
 ## Overview
 Chronicle is a browser-based interactive storytelling app that generates branching choose-your-own-adventure experiences. It runs entirely client-side against the Google Gemini and Imagen APIs (with a Pollinations fallback for images and the browser's speech synthesis as an audio fallback). There is no build step: GitHub Pages serves the files as-is.
@@ -12,9 +12,9 @@ As the story unfolds, the engine maintains a persistent memory: a running log of
 * **Persistent memory engine** — per-turn beats, automatic compaction of older beats into a long-term summary (with a rewind-safe `foldedThrough` watermark), the most recent prose (or a style card) for voice continuity, a current-scene object that is always injected, and relevance-filtered + player-pinned codex entries.
 * **Structured output** — narrative turns are generated with a Gemini `responseSchema`, guaranteeing narrative, scene, codex updates, summary, and image prompt every turn. Choice buttons are only requested in choice mode.
 * **Choice or text input** — **Choice** shows a 2×2 action grid and no text field. **Text** shows only the type-in box: leftover buttons from an earlier page are hidden immediately, and the next turn does not generate actions.
-* **Streaming narrative** — text is revealed as it is written (toggle in Settings), with a non-streaming fallback.
-* **Gameplay controls** — rewind a turn, regenerate the latest turn, or edit your last action and regenerate from there. In-flight generations are aborted so turns cannot race.
-* **Editable bible** — pin, edit, or merge codex entries; player-authored facts are always injected.
+* **Streaming narrative** — text is revealed as it is written (toggle in Settings), with a non-streaming fallback. Runaway scene fields are cut short; a streamed narrative is salvaged instead of failover-regenerating a different page.
+* **Gameplay controls** — rewind a turn, regenerate the latest turn, or edit your last action and regenerate from there. Narrative turns abort in-flight text so they cannot race; page images keep generating if you continue.
+* **Codex** — pin or merge entries; discoveries land on the same turn, each with a reference portrait shown in the popup and reused for later scene images. Fields are read-only.
 * **Optional stat HUD** — let the Game Master track stats (health, resources, etc.) shown as a HUD; off by default.
 * **Multi-modal generation** — real-time generated imagery and text-to-speech narration accompany the text. Images are compressed on a web worker and stored in IndexedDB (not `localStorage`).
 * **Auto-Play** — when off, Chronicle does **not** call the TTS API after a turn (saves tokens and time). The speaker button still narrates on demand.
@@ -41,9 +41,9 @@ src/
     session.js          # processTurn, rebuildBase, abort, compact, style card, continuity check
   utils/
     audio.js            # PCM -> WAV
-    idb.js              # IndexedDB (saves + image blobs)
+    idb.js              # IndexedDB (saves + turn images + codex portraits)
     images.js           # web-worker image snapshot client
-    storage.js          # save/load, live slots, import/export
+    storage.js          # save/load, live slots, import/export, scene sanitizer
   workers/
     compress-image.js   # OffscreenCanvas WebP/JPEG encode
   components/
@@ -51,7 +51,7 @@ src/
     ApiKeyModal.js
     SetupView.js        # home, start options, story list
     SettingsPanel.js
-    Panels.js           # Codex/Summary side panel + editable codex modal
+    Panels.js           # Codex/Summary side panel + read-only codex modal with portrait
     GameView.js         # main play screen
 ```
 
@@ -64,7 +64,7 @@ Each turn sends the player's action plus a system prompt assembled from:
 5. The recent running-log beats.
 6. The most relevant codex entries (mentioned recently, recently cited, player-pinned, protagonist, current location).
 
-The model returns structured JSON; the new beat is appended, scene is replaced, and codex updates are merged (status/location replace; lore appends; aliases are kept). Rewind/regenerate abort any in-flight turn and rebuild derived state by replaying remaining turns, keeping `longTerm` unless the player rewound into the folded prefix.
+The model returns structured JSON (narrative and image prompt first, then lore, then scene). The new beat is appended, scene is replaced (and sanitized), and codex updates are merged the same turn, with a follow-up lore scan for anything the GM omitted. Scene images attach stored Codex portraits as visual references. Rewind/regenerate abort in-flight text and rebuild derived state by replaying remaining turns, keeping `longTerm` unless the player rewound into the folded prefix.
 
 The API key is sent as the `x-goog-api-key` header (not in the query string). 429s use exponential backoff; 401/403 do not cycle models.
 
@@ -92,7 +92,7 @@ Each defaults to "Auto (recommended)", which uses the built-in fallback chain. I
 Settings also expose a continuity-check toggle (extra API call, warnings only), a keep-last-N-images slider (0 = prompts only, regenerate on resume), and a live context-size readout.
 
 ## Privacy
-Your API key is stored only in your browser's `localStorage` and is sent only to Google's API endpoints. Saved stories and image blobs live in IndexedDB in this origin; use Export to back a story up as a `.json` file (images are not embedded; they regenerate from `image_prompt`).
+Your API key is stored only in your browser's `localStorage` and is sent only to Google's API endpoints. Saved stories, scene images, and Codex portraits live in IndexedDB in this origin; use Export to back a story up as a `.json` file (images are not embedded; scene art regenerates from `image_prompt`, portraits regenerate when an entry is opened).
 
 ## License
 Apache License 2.0.

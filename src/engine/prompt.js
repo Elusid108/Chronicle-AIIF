@@ -2,37 +2,37 @@ import { GENRE_PROMPTS, STYLE_PROMPTS, EMPTY_SCENE } from '../constants.js';
 import { normalizeSummary } from '../utils/storage.js';
 import { selectRelevantCodex, recentNarratives } from './memory.js';
 
+const CODEX_UPDATE_ITEM = {
+    type: 'object',
+    properties: {
+        category: { type: 'string', enum: ['character', 'place', 'item'] },
+        key: { type: 'string' },
+        entry: { type: 'string' },
+        visual: { type: 'string' },
+        aliases: { type: 'array', items: { type: 'string' }, maxItems: 6 },
+        status: { type: 'string' },
+        location: { type: 'string' },
+    },
+    required: ['category', 'key', 'entry'],
+};
+
 // Structured-output schema. narrative is ordered first so it streams earliest.
 export const TURN_SCHEMA = {
     type: 'object',
     properties: {
         narrative: { type: 'string' },
+        image_prompt: { type: 'string' },
+        codex_updates: { type: 'array', items: CODEX_UPDATE_ITEM, maxItems: 20 },
         choices: { type: 'array', items: { type: 'string' }, maxItems: 4 },
         summary_update: { type: 'string' },
-        image_prompt: { type: 'string' },
         scene: {
             type: 'object',
             properties: {
-                location: { type: 'string' },
-                time_of_day: { type: 'string' },
-                present_characters: { type: 'array', items: { type: 'string' } },
-                goal: { type: 'string' },
-                open_threads: { type: 'array', items: { type: 'string' } },
-            },
-        },
-        codex_updates: {
-            type: 'array',
-            items: {
-                type: 'object',
-                properties: {
-                    category: { type: 'string', enum: ['character', 'place', 'item'] },
-                    key: { type: 'string' },
-                    entry: { type: 'string' },
-                    aliases: { type: 'array', items: { type: 'string' } },
-                    status: { type: 'string' },
-                    location: { type: 'string' },
-                },
-                required: ['category', 'key', 'entry'],
+                location: { type: 'string', maxLength: 160 },
+                time_of_day: { type: 'string', maxLength: 80 },
+                present_characters: { type: 'array', items: { type: 'string', maxLength: 60 }, maxItems: 12 },
+                goal: { type: 'string', maxLength: 200 },
+                open_threads: { type: 'array', items: { type: 'string', maxLength: 120 }, maxItems: 6 },
             },
         },
         state_updates: {
@@ -42,10 +42,19 @@ export const TURN_SCHEMA = {
                 properties: { key: { type: 'string' }, value: { type: 'string' } },
                 required: ['key', 'value'],
             },
+            maxItems: 12,
         },
     },
     required: ['narrative', 'choices', 'summary_update', 'image_prompt', 'codex_updates', 'scene'],
-    propertyOrdering: ['narrative', 'choices', 'summary_update', 'image_prompt', 'scene', 'codex_updates', 'state_updates'],
+    propertyOrdering: ['narrative', 'image_prompt', 'codex_updates', 'choices', 'summary_update', 'scene', 'state_updates'],
+};
+
+export const LORE_BACKFILL_SCHEMA = {
+    type: 'object',
+    properties: {
+        codex_updates: { type: 'array', items: CODEX_UPDATE_ITEM, maxItems: 16 },
+    },
+    required: ['codex_updates'],
 };
 
 export const buildTurnSchema = (mode = 'choice') => {
@@ -71,9 +80,6 @@ const choiceTask = (mode) => {
     return `2. CHOICES: Provide exactly 4 distinct, full-phrase choices in the choices array every turn (unless this is a final conclusion turn, then return an empty array).`;
 };
 
-// Assemble the system prompt. Context is layered: current scene (always),
-// a folded long-term summary, recent beats, a style card and/or last prose,
-// and only the most relevant (plus pinned) codex entries.
 const pacingTask = (pacing) => {
     if (pacing === 'direct') {
         return `PACING: Direct. Write 2–4 short second-person sentences. Name the salient objects, exits, and people in plain language. No atmosphere, metaphor, or purple prose. Example: "You wake up in a dark room. There is a locked door, a bed, a chair, and a crate. What do you do?"`;
@@ -142,8 +148,8 @@ export const buildSystemPrompt = ({
     }
 
     const extra = [
-        `6. SCENE: Fill scene with the player's current location, time of day, who is present, the immediate goal, and open_threads (unresolved promises).`,
-        `7. CODEX FIELDS: For each update you may set aliases, status (alive/dead/unknown/etc.), and location. Use category "character", "place", or "item".`,
+        `6. SCENE: Fill scene with short literal values only: location (place name), time_of_day (e.g. "Midnight, rainy"), present_characters, a one-line goal, and up to 6 open_threads. Never self-correct, never write "let's clean up", never dump clocks/metrics/indexes, never repeat a phrase.`,
+        `7. CODEX FIELDS: For each update you may set visual (one-line appearance for the painter), aliases, status, and location. Use category "character", "place", or "item".`,
     ];
     if (statsEnabled) extra.push(`8. STATE: When the player's tracked stats change (health, resources, etc.), reflect it in state_updates as key/value pairs.`);
 
@@ -151,7 +157,7 @@ export const buildSystemPrompt = ({
 `TASK:
 1. NARRATIVE: Write the next segment in SECOND PERSON ("You..."). The player IS the protagonist. Follow PACING. Maintain continuity with PREVIOUS PROSE. The narrative must NOT include the numbered choice list. The narrative ends with a setup question (e.g. "What do you do?").
 ${choiceTask(config.mode)}
-3. LORE SCANNING (CRITICAL): Act as a database engine. Add codex_updates for EVERY named character, location, or significant item in your narrative. If an entity is new, add it; if a known entity gains new detail, update it. Do not be lazy.
+3. LORE SCANNING (CRITICAL): Add codex_updates THIS TURN for every named character, location, and significant item in your narrative — including unnamed-but-distinct objects the player finds or uses (a plasma cutter, a locked journal, a keycard). If an entity is new, add it with a short visual; if a known entity gains detail, update it. Do not skip items sitting in bags, rooms, or inventory.
 4. SUMMARY: summary_update is a concise one-to-two sentence log of what happened THIS turn only.
 5. VISUALS: image_prompt describes the scene for the image generator in the chosen visual style. Do NOT use proper names (the painter does not know who "Kael" is); use visual descriptions ("a scar-faced soldier").
 ${extra.join('\n')}`

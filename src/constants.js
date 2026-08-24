@@ -1,4 +1,15 @@
-export const CHRONICLE_VERSION = '3.1.1';
+export const CHRONICLE_VERSION = '3.2.0';
+
+export const SCENE_FIELD_LIMITS = {
+    location: 160,
+    time_of_day: 80,
+    goal: 200,
+    present_character: 60,
+    open_thread: 120,
+};
+
+export const CODEX_DESC_LIMIT = 800;
+export const CODEX_VISUAL_LIMIT = 180;
 
 export const GENRE_PROMPTS = {
     fantasy: "High fantasy setting, medieval world, intricate magic systems, mythical creatures, dragons and elves, epic quests, ancient ruins, sword and sorcery, grand narrative scale, world-building focus",

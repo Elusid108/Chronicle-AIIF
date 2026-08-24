@@ -106,7 +106,7 @@ const throwIfBad = (response) => {
 
 // Tolerantly pull a string field's value out of a (possibly incomplete) JSON
 // buffer. Used to reveal the narrative while the model is still streaming.
-export const extractJsonStringField = (buffer, field) => {
+export const extractJsonStringField = (buffer, field, opts = {}) => {
     const keyIdx = buffer.indexOf(`"${field}"`);
     if (keyIdx === -1) return null;
     let i = buffer.indexOf('"', keyIdx + field.length + 2);
@@ -132,7 +132,19 @@ export const extractJsonStringField = (buffer, field) => {
         out += ch;
         i += 1;
     }
-    return out;
+    return opts.completeOnly ? null : out;
+};
+
+export const hasRunawayRepetition = (text) => {
+    const s = String(text || '');
+    if (s.length < 900) return false;
+    const cleanHits = s.match(/\bLet's (?:clean|keep)\b/gi);
+    if (cleanHits && cleanHits.length >= 3) return true;
+    const tail = s.slice(-600);
+    if (tail.length < 80) return false;
+    const needle = tail.slice(0, 40);
+    if (needle.trim().length < 20) return false;
+    return s.split(needle).length - 1 >= 6;
 };
 
 const parseModelJson = (text) => {
@@ -183,7 +195,7 @@ const buildTextPayload = (prompt, systemInstruction, schema) => {
     };
 };
 
-const streamGenerate = async (apiKey, model, payload, { onPartialText, signal } = {}) => {
+const streamGenerate = async (apiKey, model, payload, { onPartialText, onPartialBuffer, signal } = {}) => {
     const url = `${API_BASE}/models/${model}:streamGenerateContent?alt=sse`;
     const response = await fetchGemini(url, {
         method: 'POST',
@@ -198,6 +210,7 @@ const streamGenerate = async (apiKey, model, payload, { onPartialText, signal } 
     const decoder = new TextDecoder();
     let sseBuffer = '';
     let fullText = '';
+    let runaway = false;
 
     const flushEvent = (chunk) => {
         const lines = chunk.split(/\r?\n/);
@@ -215,12 +228,18 @@ const streamGenerate = async (apiKey, model, payload, { onPartialText, signal } 
                         const narrative = extractJsonStringField(fullText, 'narrative');
                         if (narrative != null) onPartialText(narrative);
                     }
+                    if (onPartialBuffer) onPartialBuffer(fullText);
+                    if (hasRunawayRepetition(fullText)) runaway = true;
                 }
             } catch { /* partial SSE frame */ }
         }
     };
 
     while (true) {
+        if (runaway) {
+            try { await reader.cancel(); } catch { /* ignore */ }
+            break;
+        }
         const { done, value } = await reader.read();
         if (done) break;
         sseBuffer += decoder.decode(value, { stream: true });
@@ -228,18 +247,38 @@ const streamGenerate = async (apiKey, model, payload, { onPartialText, signal } 
         sseBuffer = events.pop() || '';
         for (const ev of events) flushEvent(ev);
     }
-    if (sseBuffer.trim()) flushEvent(sseBuffer);
+    if (!runaway && sseBuffer.trim()) flushEvent(sseBuffer);
     return fullText;
+};
+
+const salvageTurnData = (fullText, parsed) => {
+    const narrative = (parsed && parsed.narrative)
+        || extractJsonStringField(fullText, 'narrative', { completeOnly: true })
+        || extractJsonStringField(fullText, 'narrative');
+    if (!narrative) return null;
+    const imagePrompt = (parsed && parsed.image_prompt)
+        || extractJsonStringField(fullText, 'image_prompt', { completeOnly: true })
+        || '';
+    return {
+        narrative,
+        image_prompt: imagePrompt,
+        choices: Array.isArray(parsed?.choices) ? parsed.choices : [],
+        summary_update: parsed?.summary_update || extractJsonStringField(fullText, 'summary_update', { completeOnly: true }) || '',
+        scene: parsed?.scene && typeof parsed.scene === 'object' ? parsed.scene : {},
+        codex_updates: Array.isArray(parsed?.codex_updates) ? parsed.codex_updates : [],
+        state_updates: Array.isArray(parsed?.state_updates) ? parsed.state_updates : [],
+    };
 };
 
 /**
  * Generate one structured narrative turn.
  * deps: { apiKey, modelPrefs, setStatus }
- * opts: { schema, stream, onPartialText, signal }
+ * opts: { schema, stream, onPartialText, onPartialBuffer, signal }
  */
 export const callGemini = async (deps, prompt, systemInstruction = '', opts = {}) => {
     const { apiKey, modelPrefs, setStatus, availableTextModels } = deps;
-    const { schema, stream, onPartialText, signal } = opts;
+    const { schema, stream, onPartialText, onPartialBuffer, signal } = opts;
+    const requiresNarrative = !schema || Boolean(schema.properties?.narrative);
     const attempts = [];
     let data = null;
 
@@ -247,17 +286,18 @@ export const callGemini = async (deps, prompt, systemInstruction = '', opts = {}
 
     for (const model of modelsToTry) {
         const start = performance.now();
+        let fullText = '';
         try {
-            setStatus && setStatus(`Narrative: ${model}...`);
+            setStatus && setStatus(requiresNarrative ? `Narrative: ${model}...` : `Lore: ${model}...`);
             const payload = buildTextPayload(prompt, systemInstruction, schema);
 
             if (stream) {
-                const fullText = await streamGenerate(apiKey, model, payload, { onPartialText, signal });
-                data = parseModelJson(fullText);
-                if (!data?.narrative) {
-                    const narrative = extractJsonStringField(fullText, 'narrative');
-                    if (narrative) data = { ...(data || {}), narrative, choices: Array.isArray(data?.choices) ? data.choices : [] };
-                }
+                fullText = await streamGenerate(apiKey, model, payload, { onPartialText, onPartialBuffer, signal });
+                let parsed = null;
+                try { parsed = parseModelJson(fullText); } catch { parsed = null; }
+                data = requiresNarrative
+                    ? ((parsed && parsed.narrative) ? parsed : salvageTurnData(fullText, parsed))
+                    : parsed;
             } else {
                 const url = `${API_BASE}/models/${model}:generateContent`;
                 const response = await fetchGemini(url, {
@@ -268,9 +308,10 @@ export const callGemini = async (deps, prompt, systemInstruction = '', opts = {}
                 });
                 throwIfBad(response);
                 const result = await response.json();
-                data = parseModelJson(result.candidates[0].content.parts[0].text);
+                fullText = result.candidates[0].content.parts[0].text;
+                data = parseModelJson(fullText);
             }
-            if (!data?.narrative) throw new Error('Invalid model JSON');
+            if (requiresNarrative ? !data?.narrative : !data) throw new Error('Invalid model JSON');
             attempts.push({ model, status: 'success', duration: (performance.now() - start) / 1000 });
             break;
         } catch (e) {
@@ -278,10 +319,19 @@ export const callGemini = async (deps, prompt, systemInstruction = '', opts = {}
             if (e instanceof GeminiHttpError && (e.status === 401 || e.status === 403)) {
                 throw new Error('API key rejected (401/403)');
             }
+            if (requiresNarrative) {
+                const salvaged = salvageTurnData(fullText, null);
+                if (salvaged?.narrative) {
+                    data = salvaged;
+                    attempts.push({ model, status: 'success', duration: (performance.now() - start) / 1000 });
+                    break;
+                }
+            }
+            data = null;
             attempts.push({ model, status: 'failed', duration: (performance.now() - start) / 1000, error: e.message });
             const canFailover = !(e instanceof GeminiHttpError && (e.status === 401 || e.status === 403));
             if (!canFailover) throw e;
-            if (onPartialText) onPartialText('');
+            if (requiresNarrative && onPartialText) onPartialText('');
             console.warn(`Model ${model} failed. Trying next...`, e.message);
         }
     }
@@ -330,17 +380,27 @@ export const callGeminiText = async (deps, prompt, systemInstruction = '', opts 
  */
 export const generateImage = async (deps, imagePrompt, opts = {}) => {
     const { apiKey, modelPrefs, config, mediaStatus, setMediaStatus, setStatus, availableImageModels } = deps;
-    const { signal } = opts;
+    const { signal, references } = opts;
     if (mediaStatus.images === 'disabled') return { image: null, stats: [{ model: 'disabled', status: 'skipped', duration: 0 }] };
 
     const styleKey = config.style === 'custom' ? config.styleCustom : config.style;
     const styleText = STYLE_PROMPTS[styleKey] || styleKey;
-    const fullPrompt = `Style: ${styleText}. ${imagePrompt}`;
+    const refNotes = (references || [])
+        .map((ref, i) => `${i + 1}. ${ref.label || 'Reference image'}`)
+        .join(' ');
+    const textOnlyPrompt = `Style: ${styleText}. ${imagePrompt}`;
+    const fullPrompt = refNotes
+        ? `Style: ${styleText}. Use the attached reference images to keep the same faces, clothing, objects, and places. ${refNotes} ${imagePrompt}`
+        : textOnlyPrompt;
     const attempts = [];
+    const refParts = (references || []).flatMap((ref) => ([
+        { text: ref.label || 'Reference image' },
+        { inlineData: { mimeType: ref.mime || 'image/webp', data: ref.data } },
+    ]));
 
     const tryPollinations = async () => {
         const start = performance.now();
-        const encodedPrompt = encodeURIComponent(fullPrompt);
+        const encodedPrompt = encodeURIComponent(textOnlyPrompt);
         const pollUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=576&nologo=true`;
         await new Promise((resolve, reject) => {
             const img = new Image();
@@ -368,7 +428,7 @@ export const generateImage = async (deps, imagePrompt, opts = {}) => {
         try {
             if (isImagen) {
                 const url = `${API_BASE}/models/${modelId}:predict`;
-                const payload = { instances: [{ prompt: fullPrompt }], parameters: { sampleCount: 1, aspectRatio: '16:9' } };
+                const payload = { instances: [{ prompt: textOnlyPrompt }], parameters: { sampleCount: 1, aspectRatio: '16:9' } };
                 const response = await fetchGemini(url, {
                     method: 'POST',
                     headers: authHeaders(apiKey),
@@ -388,7 +448,10 @@ export const generateImage = async (deps, imagePrompt, opts = {}) => {
                 throw new Error('No image data in response');
             }
             const url = `${API_BASE}/models/${modelId}:generateContent`;
-            const payload = { contents: [{ parts: [{ text: fullPrompt }] }], generationConfig: { responseModalities: ['IMAGE'] } };
+            const payload = {
+                contents: [{ parts: [...refParts, { text: fullPrompt }] }],
+                generationConfig: { responseModalities: ['IMAGE'] },
+            };
             const response = await fetchGemini(url, {
                 method: 'POST',
                 headers: authHeaders(apiKey),
@@ -415,7 +478,12 @@ export const generateImage = async (deps, imagePrompt, opts = {}) => {
         }
     };
 
-    const imageModelsToTry = collectImageModels(modelPrefs, availableImageModels);
+    let imageModelsToTry = collectImageModels(modelPrefs, availableImageModels);
+    if (refParts.length) {
+        const withRefs = imageModelsToTry.filter((id) => !id.includes('imagen'));
+        const imagenOnly = imageModelsToTry.filter((id) => id.includes('imagen'));
+        imageModelsToTry = withRefs.length ? [...withRefs, ...imagenOnly] : imageModelsToTry;
+    }
 
     for (const modelId of imageModelsToTry) {
         const result = await tryImageModel(modelId);

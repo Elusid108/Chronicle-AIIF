@@ -1,5 +1,5 @@
-import { EMPTY_SCENE, EMPTY_SUMMARY } from '../constants.js';
-import { normalizeCodex, normalizeEntry, normalizeScene, normalizeSummary } from '../utils/storage.js';
+import { CODEX_DESC_LIMIT, CODEX_VISUAL_LIMIT, EMPTY_SCENE } from '../constants.js';
+import { normalizeCodex, normalizeEntry, normalizeScene, normalizeSummary, sanitizeSceneString } from '../utils/storage.js';
 
 export const normalizeKey = (key) => String(key || '').trim().replace(/\s+/g, ' ');
 
@@ -31,6 +31,16 @@ const findExistingKey = (bucket, rawKey) => {
     return null;
 };
 
+const appendDescription = (existing, incoming) => {
+    const nextBit = sanitizeSceneString(incoming, 400);
+    if (!nextBit) return existing || '';
+    let desc = existing || '';
+    if (desc.toLowerCase().includes(nextBit.toLowerCase())) return desc;
+    desc = desc ? `${desc}; ${nextBit}` : nextBit;
+    if (desc.length <= CODEX_DESC_LIMIT) return desc;
+    return desc.slice(0, CODEX_DESC_LIMIT).replace(/\s+\S*$/, '').trim();
+};
+
 export const mergeCodex = (prev, updates, currentTurnIndex) => {
     if (!updates || !Array.isArray(updates)) return normalizeCodex(prev);
     const next = normalizeCodex(prev);
@@ -39,7 +49,14 @@ export const mergeCodex = (prev, updates, currentTurnIndex) => {
     updates.forEach((item) => {
         const catKey = resolveCategory(item.category);
         const incomingKey = normalizeKey(item.key);
-        if (!catKey || !incomingKey || !item.entry) return;
+        if (!catKey || !incomingKey) return;
+        const entryText = (typeof item.entry === 'string' && item.entry.trim())
+            ? item.entry.trim()
+            : incomingKey;
+        const visual = sanitizeSceneString(
+            typeof item.visual === 'string' ? item.visual : '',
+            CODEX_VISUAL_LIMIT,
+        );
 
         const existingKey = findExistingKey(next[catKey], incomingKey) || incomingKey;
         const existing = next[catKey][existingKey] ? normalizeEntry(next[catKey][existingKey]) : null;
@@ -48,8 +65,6 @@ export const mergeCodex = (prev, updates, currentTurnIndex) => {
         const location = typeof item.location === 'string' ? item.location.trim() : '';
 
         if (existing) {
-            let desc = existing.description || '';
-            if (item.entry && !desc.includes(item.entry)) desc = desc ? `${desc}; ${item.entry}` : item.entry;
             const cites = existing.citations.includes(pageNum) ? existing.citations : [...existing.citations, pageNum];
             const mergedAliases = [...existing.aliases];
             for (const a of aliases) {
@@ -63,25 +78,43 @@ export const mergeCodex = (prev, updates, currentTurnIndex) => {
             }
             next[catKey][existingKey] = {
                 ...existing,
-                description: desc,
+                description: appendDescription(existing.description, entryText),
                 citations: cites,
                 aliases: mergedAliases,
                 status: status || existing.status,
                 location: location || existing.location,
+                visual: visual || existing.visual,
             };
         } else {
             next[catKey][incomingKey] = {
-                description: item.entry,
+                description: appendDescription('', entryText),
                 citations: [pageNum],
                 aliases: aliases.filter((a) => a.toLowerCase() !== incomingKey.toLowerCase()),
                 status,
                 location,
                 source: 'model',
                 pinned: false,
+                visual,
+                hasPortrait: false,
+                portraitUrl: '',
             };
         }
     });
     return next;
+};
+
+export const listCodexKeys = (codex) => {
+    const out = [];
+    const src = normalizeCodex(codex);
+    for (const cat of ['characters', 'places', 'items']) {
+        for (const key of Object.keys(src[cat] || {})) out.push({ cat, key });
+    }
+    return out;
+};
+
+export const diffNewCodexEntries = (prev, next) => {
+    const old = new Set(listCodexKeys(prev).map((x) => `${x.cat}:${x.key.toLowerCase()}`));
+    return listCodexKeys(next).filter((x) => !old.has(`${x.cat}:${x.key.toLowerCase()}`));
 };
 
 export const countCodexEntries = (codex) =>
@@ -114,6 +147,7 @@ const compactForm = (key, data) => ({
     aliases: data.aliases,
     status: data.status,
     location: data.location,
+    visual: data.visual,
     source: data.source,
     pinned: data.pinned,
 });
@@ -197,7 +231,10 @@ export const updateCodexEntry = (codex, category, key, patch) => {
         location: patch.location != null ? String(patch.location) : current.location,
         aliases,
         pinned: patch.pinned != null ? Boolean(patch.pinned) : current.pinned,
-        source: 'player',
+        visual: patch.visual != null ? sanitizeSceneString(String(patch.visual), CODEX_VISUAL_LIMIT) : current.visual,
+        hasPortrait: patch.hasPortrait != null ? Boolean(patch.hasPortrait) : current.hasPortrait,
+        portraitUrl: patch.portraitUrl != null ? String(patch.portraitUrl) : current.portraitUrl,
+        source: patch.source != null ? patch.source : (patch.description != null ? 'player' : current.source),
     };
     return next;
 };
@@ -229,6 +266,9 @@ export const mergeCodexKeys = (codex, category, fromKey, intoKey) => {
         aliases,
         status: into.status || from.status,
         location: into.location || from.location,
+        visual: into.visual || from.visual,
+        hasPortrait: Boolean(into.hasPortrait || from.hasPortrait),
+        portraitUrl: into.portraitUrl || from.portraitUrl,
         pinned: into.pinned || from.pinned,
         source: into.source === 'player' || from.source === 'player' ? 'player' : 'model',
     };
@@ -236,8 +276,9 @@ export const mergeCodexKeys = (codex, category, fromKey, intoKey) => {
     return next;
 };
 
-const visualForEntry = (key, data) => {
-    const desc = (data.description || '').split(/[.;]/)[0].trim();
+export const visualForEntry = (key, data) => {
+    if (data?.visual) return data.visual;
+    const desc = (data?.description || '').split(/[.;]/)[0].trim();
     if (desc) return desc;
     return `a figure known as ${key}`;
 };
@@ -261,4 +302,74 @@ export const scrubImagePrompt = (prompt, codex) => {
         out = out.replace(new RegExp(`\\b${escapeRegExp(n)}\\b`, 'gi'), visual);
     }
     return out;
+};
+
+const findBucketKey = (bucket, name) => {
+    const n = normalizeKey(name);
+    if (!n) return null;
+    const nLower = n.toLowerCase();
+    for (const [k, val] of Object.entries(bucket || {})) {
+        if (k.toLowerCase() === nLower) return k;
+        const entry = normalizeEntry(val);
+        if ((entry.aliases || []).some((a) => normalizeKey(a).toLowerCase() === nLower)) return k;
+    }
+    return null;
+};
+
+export const overlayCodexRuntime = (rebuilt, previous) => {
+    const next = normalizeCodex(rebuilt);
+    const old = normalizeCodex(previous);
+    for (const cat of ['characters', 'places', 'items']) {
+        for (const [key, data] of Object.entries(next[cat] || {})) {
+            const prior = old[cat]?.[key];
+            if (!prior) continue;
+            next[cat][key] = {
+                ...data,
+                visual: data.visual || prior.visual,
+                hasPortrait: Boolean(data.hasPortrait || prior.hasPortrait),
+                portraitUrl: data.portraitUrl || prior.portraitUrl,
+            };
+        }
+    }
+    return next;
+};
+
+export const pickCodexImageRefs = (codex, scene = EMPTY_SCENE, narrative = '', maxRefs = 10, opts = {}) => {
+    const src = normalizeCodex(codex);
+    const picks = [];
+    const used = new Set();
+    let characterCount = 0;
+    const allowMissing = Boolean(opts.allowMissing);
+    const take = (cat, key, label) => {
+        if (!key || picks.length >= maxRefs) return;
+        if (cat === 'characters' && characterCount >= 4) return;
+        const id = `${cat}:${key.toLowerCase()}`;
+        if (used.has(id)) return;
+        const data = src[cat]?.[key];
+        if (!data) return;
+        if (!allowMissing && !(data.hasPortrait || data.portraitUrl)) return;
+        used.add(id);
+        if (cat === 'characters') characterCount += 1;
+        picks.push({ category: cat, key, label });
+    };
+
+    for (const name of scene.present_characters || []) {
+        const key = findBucketKey(src.characters, name);
+        if (key) take('characters', key, `Character reference for ${key}. Keep this face, hair, and clothing.`);
+    }
+    const placeKey = findBucketKey(src.places, scene.location)
+        || Object.keys(src.places || {}).find((k) => mentionedIn(scene.location || '', k));
+    if (placeKey) take('places', placeKey, `Location reference for ${placeKey}. Keep this architecture and lighting.`);
+
+    const haystack = `${narrative || ''} ${scene.location || ''}`;
+    for (const cat of ['items', 'characters', 'places']) {
+        const kind = cat === 'characters' ? 'Character' : cat === 'places' ? 'Location' : 'Object';
+        for (const [key, val] of Object.entries(src[cat] || {})) {
+            const data = normalizeEntry(val);
+            const names = [key, ...(data.aliases || [])];
+            if (!names.some((n) => mentionedIn(haystack, n))) continue;
+            take(cat, key, `${kind} reference for ${key}. Match this appearance.`);
+        }
+    }
+    return picks;
 };

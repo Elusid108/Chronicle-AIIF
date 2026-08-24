@@ -4,18 +4,21 @@ import { DEFAULT_CONFIG, DEFAULT_CODEX, EMPTY_SCENE } from './constants.js';
 import {
     STORAGE_KEYS, loadJSON, saveJSON,
     initStorage, readActiveSave, writeActiveSave, clearActiveSave, attachStoredImages,
+    attachCodexPortraits, revokeCodexPortraits,
     listSlots, deleteSlot, loadSlot, exportStoryFile, importStoryFile,
     normalizeSummary, createStorySlot, writeStorySlot, renameSlot, reorderSlots,
     setCurrentSlotId, ensureActiveMigratedToLibrary,
 } from './utils/storage.js';
-import { fetchAvailableModels, generateImage, generateSpeech } from './api/gemini.js';
+import { fetchAvailableModels, generateSpeech } from './api/gemini.js';
 import { buildInitialPrompt, buildSystemPrompt } from './engine/prompt.js';
-import { mergeCodexKeys, pinCodexEntry, scrubImagePrompt, updateCodexEntry } from './engine/memory.js';
+import { mergeCodexKeys, overlayCodexRuntime, pinCodexEntry, updateCodexEntry } from './engine/memory.js';
 import {
-    EMPTY_SUMMARY, abortActiveTurn, lastAiIndex, processTurn, rebuildBase,
+    EMPTY_SUMMARY, abortActiveTurn, abortAllAssetSignals, abortAssetSignal, attachSceneImage,
+    generateEntryPortrait, lastAiIndex, processTurn, rebuildBase,
+    startAssetSignal,
 } from './engine/session.js';
-import { revokeHistoryImages, snapshotImage } from './utils/images.js';
-import { ACTIVE_SAVE_ID, copyImages, pruneTurnImages, putTurnImage } from './utils/idb.js';
+import { revokeHistoryImages } from './utils/images.js';
+import { ACTIVE_SAVE_ID, copyCodexImageKey, copyCodexImages, copyImages, getCodexImage } from './utils/idb.js';
 import { ApiKeyModal } from './components/ApiKeyModal.js';
 import { SetupView } from './components/SetupView.js';
 import { GameView } from './components/GameView.js';
@@ -86,6 +89,7 @@ export function App() {
     const playingTurnRef = useRef(null);
     const toastTimer = useRef(null);
     const abortRef = useRef(null);
+    const assetAbortMap = useRef(new Map());
     const snapshotRef = useRef({});
     const saveWriteId = useRef(0);
 
@@ -185,6 +189,10 @@ export function App() {
 
     useEffect(() => { if (history.length > 0) setCurrentSlideIndex(history.length - 1); }, [history.length]);
     useEffect(() => { if (textScrollRef.current) textScrollRef.current.scrollTop = 0; }, [currentSlideIndex, history]);
+    useEffect(() => {
+        if (!selectedCodexEntry) return;
+        ensureCodexPortrait(selectedCodexEntry.category, selectedCodexEntry.title);
+    }, [selectedCodexEntry?.category, selectedCodexEntry?.title]);
 
     useEffect(() => {
         const currentTurn = history[currentSlideIndex];
@@ -236,28 +244,59 @@ export function App() {
     const speechDeps = () => ({ apiKey, modelPrefs, prefs, mediaStatus, setMediaStatus, setStatus });
 
     const regenImageForIndex = (idx, turn) => {
-        const scrubbed = scrubImagePrompt(turn.image_prompt, snapshotRef.current.codex);
-        generateImage(imageDeps(), scrubbed).then(async (imageResult) => {
-            if (!imageResult.image) return;
-            const snapshotted = await snapshotImage(imageResult.image);
-            const url = snapshotted.url || imageResult.image;
-            setHistory((prev) => {
-                const updated = [...prev];
-                if (updated[idx] && updated[idx].narrative === turn.narrative) updated[idx] = { ...updated[idx], image: url };
-                return updated;
-            });
-            if (snapshotted.blob && (snapshotRef.current.prefs.keepLastNImages || 0) > 0) {
-                try {
-                    const imageSaveId = snapshotRef.current.currentSlotId || ACTIVE_SAVE_ID;
-                    await putTurnImage(imageSaveId, idx, snapshotted.blob);
-                    await pruneTurnImages(imageSaveId, snapshotRef.current.prefs.keepLastNImages);
-                    if (imageSaveId !== ACTIVE_SAVE_ID) {
-                        await putTurnImage(ACTIVE_SAVE_ID, idx, snapshotted.blob);
-                        await pruneTurnImages(ACTIVE_SAVE_ID, snapshotRef.current.prefs.keepLastNImages);
-                    }
-                } catch { /* ignore */ }
-            }
+        if (!turn?.image_prompt) return;
+        const live = snapshotRef.current;
+        setGeneratingAssets((prev) => ({ ...prev, image: true }));
+        const imageSignal = startAssetSignal(assetAbortMap, `scene:${idx}`);
+        attachSceneImage({
+            io: turnIo(),
+            imageDeps,
+            prompt: turn.image_prompt,
+            codex: live.codex,
+            scene: live.scene,
+            narrative: turn.narrative,
+            slotId: live.currentSlotId || ACTIVE_SAVE_ID,
+            keepLastN: live.prefs?.keepLastNImages || 0,
+            turnIndex: idx,
+            setHistory,
+            signal: imageSignal,
+            showToast,
+            setGeneratingAssets,
+            assetAbortMap,
+        }).catch(() => {
+            setGeneratingAssets((prev) => ({ ...prev, image: false }));
         });
+    };
+
+    const retryTurnImage = () => {
+        const idx = currentSlideIndex;
+        const turn = history[idx];
+        if (!turn || turn.type !== 'ai' || !turn.image_prompt) return;
+        regenImageForIndex(idx, turn);
+    };
+
+    const ensureCodexPortrait = async (category, key) => {
+        const entry = snapshotRef.current.codex?.[category]?.[key];
+        if (!entry) return;
+        if (entry.portraitUrl) return;
+        const slotId = snapshotRef.current.currentSlotId || ACTIVE_SAVE_ID;
+        try {
+            const blob = await getCodexImage(slotId, category, key) || await getCodexImage(ACTIVE_SAVE_ID, category, key);
+            if (blob) {
+                const url = URL.createObjectURL(blob);
+                setCodex((prev) => {
+                    if (!prev[category]?.[key]) return prev;
+                    const nextEntry = { ...prev[category][key], hasPortrait: true, portraitUrl: url };
+                    setSelectedCodexEntry((sel) => (
+                        sel && sel.category === category && sel.title === key ? { ...sel, data: nextEntry } : sel
+                    ));
+                    return { ...prev, [category]: { ...prev[category], [key]: nextEntry } };
+                });
+                return;
+            }
+        } catch { /* generate */ }
+        const signal = startAssetSignal(assetAbortMap, `portrait:${category}:${key}`);
+        generateEntryPortrait(turnIo(), { category, key, data: entry, signal }).catch(() => {});
     };
 
     const stopAudio = () => {
@@ -310,12 +349,14 @@ export function App() {
 
     const turnIo = () => ({
         abortRef,
+        assetAbortMap,
         getSnapshot: () => snapshotRef.current,
         stopAudio,
         showToast,
         setView, setLoading, setIsStreaming, setStreamingText, setStatus, setToast,
         setCodex, setSummary, setStats, setScene, setStyleCard, setHistory, setCurrentSlideIndex,
-        setGeneratingAssets, setTurnsRemaining, setIsFinished, setExportDetails, setUserInput,
+        setGeneratingAssets, setTurnsRemaining, setIsFinished, setIsEnding, setExportDetails, setUserInput,
+        setSelectedCodexEntry,
         textDeps, imageDeps, speechDeps,
     });
 
@@ -339,7 +380,9 @@ export function App() {
 
     const startGame = async () => {
         abortActiveTurn(abortRef);
+        abortAllAssetSignals(assetAbortMap);
         revokeHistoryImages(history);
+        revokeCodexPortraits(codex);
         saveWriteId.current += 1;
         await initStorage();
         await clearActiveSave();
@@ -370,9 +413,10 @@ export function App() {
     const handleTurn = (input) => { if (input && input.trim()) runTurn('continue', input); };
 
     const applyBase = (b) => {
+        abortAllAssetSignals(assetAbortMap);
         revokeHistoryImages(history.slice(b.history.length));
         setHistory(b.history);
-        setCodex(b.codex);
+        setCodex(overlayCodexRuntime(b.codex, snapshotRef.current.codex));
         setSummary(b.summary);
         setStats(b.stats);
         setScene(b.scene || { ...EMPTY_SCENE });
@@ -395,6 +439,7 @@ export function App() {
         if (idx < 0) return;
         const lastTurn = history[idx];
         abortActiveTurn(abortRef);
+        abortAssetSignal(assetAbortMap, `scene:${idx}`);
         stopAudio();
         const remaining = history.slice(0, idx);
         const base = rebuildBase(remaining, summary);
@@ -424,6 +469,7 @@ export function App() {
         const idx = lastAiIndex(history);
         if (idx < 0) return;
         abortActiveTurn(abortRef);
+        abortAssetSignal(assetAbortMap, `scene:${idx}`);
         stopAudio();
         const base = rebuildBase(history.slice(0, idx), summary);
         applyBase(base);
@@ -451,7 +497,9 @@ export function App() {
 
     const resetGame = async () => {
         abortActiveTurn(abortRef);
+        abortAllAssetSignals(assetAbortMap);
         revokeHistoryImages(history);
+        revokeCodexPortraits(codex);
         await initStorage();
         await clearActiveSave();
         setHistory([]); setCodex({ ...DEFAULT_CODEX }); setCurrentSlideIndex(0);
@@ -503,21 +551,28 @@ export function App() {
         if (!sel || !intoKey || intoKey === sel.title) return;
         setCodex((prev) => {
             const next = mergeCodexKeys(prev, sel.category, sel.title, intoKey);
+            const slotId = snapshotRef.current.currentSlotId || ACTIVE_SAVE_ID;
+            copyCodexImageKey(slotId, sel.category, sel.title, intoKey).catch(() => {});
+            if (slotId !== ACTIVE_SAVE_ID) copyCodexImageKey(ACTIVE_SAVE_ID, sel.category, sel.title, intoKey).catch(() => {});
             setSelectedCodexEntry(null);
             return next;
         });
     };
 
     const hydrate = async (s, imageSaveId = ACTIVE_SAVE_ID) => {
+        abortAllAssetSignals(assetAbortMap);
         revokeHistoryImages(history);
+        revokeCodexPortraits(codex);
         const withImages = await attachStoredImages(s, imageSaveId);
+        const withPortraits = await attachCodexPortraits(withImages.codex, imageSaveId);
         if (imageSaveId && imageSaveId !== ACTIVE_SAVE_ID) {
             await setCurrentSlotId(imageSaveId);
             setCurrentSlotIdState(imageSaveId);
             try { await copyImages(imageSaveId, ACTIVE_SAVE_ID, snapshotRef.current.prefs.keepLastNImages || 0); } catch { /* ignore */ }
+            try { await copyCodexImages(imageSaveId, ACTIVE_SAVE_ID); } catch { /* ignore */ }
         }
         setHistory(withImages.history);
-        setCodex(withImages.codex);
+        setCodex(withPortraits);
         setSummary(normalizeSummary(withImages.summary));
         setScene(withImages.scene || { ...EMPTY_SCENE });
         setStyleCard(withImages.styleCard || '');
@@ -650,6 +705,7 @@ export function App() {
         saveCodexEdits, toggleCodexPin, mergeSelectedInto,
         isStreaming, streamingText, editingAction, setEditingActionText, beginEditAction, cancelEditAction, submitEditAction,
         rewindTurn, regenerateTurn, goHome, toast, dismissToast, contextChars,
+        retryTurnImage, ensureCodexPortrait,
         textScrollRef, onTouchStart, onTouchMove, onTouchEnd, prevSlide, nextSlide,
     };
 

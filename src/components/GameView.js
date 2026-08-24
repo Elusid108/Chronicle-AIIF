@@ -36,6 +36,7 @@ export function GameView({ app }) {
         initiateEnding, resumeStory, exportBook, exportStory, rewindTurn, regenerateTurn,
         beginEditAction, cancelEditAction, submitEditAction, setEditingActionText,
         setShowExportModal, setShowExitConfirm, setShowEndConfirm, confirmEndingSequence,
+        retryTurnImage,
     } = app;
 
     const [moreOpen, setMoreOpen] = useState(false);
@@ -119,8 +120,13 @@ export function GameView({ app }) {
                             <div className="w-full h-full flex flex-col items-center justify-center text-blue-200 gap-4 nebula-loader relative">
                                 <${Sparkles} size=${48} className="nebula-pulse opacity-80" />
                                 <span className="text-xs uppercase tracking-[0.3em] font-bold opacity-80 text-shadow-lg">
-                                    ${mediaStatus.images === 'disabled' ? 'VISUALS OFFLINE' : (isStreaming ? 'Writing the Scene...' : (generatingAssets.image ? 'Manifesting Reality...' : 'Constructing Visuals...'))}
+                                    ${mediaStatus.images === 'disabled' ? 'VISUALS OFFLINE' : (isStreaming ? 'Writing the Scene...' : (generatingAssets.image ? 'Manifesting Reality...' : 'No scene image'))}
                                 </span>
+                                ${!isStreaming && !generatingAssets.image && mediaStatus.images !== 'disabled' && currentTurnData?.image_prompt && html`
+                                    <button onClick=${retryTurnImage} className="z-10 px-3 py-1.5 text-[10px] uppercase tracking-widest font-bold bg-black/50 border border-blue-500/40 text-blue-200 rounded hover:bg-black/70 flex items-center gap-2">
+                                        <${RefreshCw} size=${12} /> Retry image
+                                    </button>
+                                `}
                             </div>
                         `
                     ) : html`<div className="w-full h-full flex items-center justify-center text-gray-800"><span className="animate-pulse">Waiting...</span></div>`}
