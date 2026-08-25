@@ -11,6 +11,8 @@ export const SCENE_FIELD_LIMITS = {
 export const CODEX_DESC_LIMIT = 800;
 export const CODEX_VISUAL_LIMIT = 180;
 
+export const IMAGE_NO_FRAME_CLAUSE = 'Fill the entire canvas edge to edge. Do not depict a physical picture frame, ornate gold frame, stacked frames, mat, gallery wall, or a painting hanging on a wall.';
+
 export const GENRE_PROMPTS = {
     fantasy: "High fantasy setting, medieval world, intricate magic systems, mythical creatures, dragons and elves, epic quests, ancient ruins, sword and sorcery, grand narrative scale, world-building focus",
     cyberpunk: "Cyberpunk aesthetic, high-tech low-life, neon-drenched megacities, corporate dystopia, cybernetic enhancements, hackers and netrunners, rain-slicked chrome, synthetic transhumanism",

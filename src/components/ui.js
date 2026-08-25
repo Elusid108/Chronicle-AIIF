@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { html } from '../html.js';
 import { Activity, AlertTriangle, X } from 'lucide-react';
 
@@ -36,6 +37,26 @@ export function Toggle({ on, onClick }) {
         <button type="button" onClick=${onClick} className=${`w-8 h-4 rounded-full relative transition-colors shrink-0 ${on ? 'bg-blue-600' : 'bg-gray-700'}`}>
             <div className=${`absolute top-0.5 w-3 h-3 bg-white rounded-full transition-transform ${on ? 'translate-x-4' : 'translate-x-0.5'}`}></div>
         </button>
+    `;
+}
+
+export function ImageLightbox({ src, alt = '', onClose }) {
+    useEffect(() => {
+        if (!src) return undefined;
+        const onKey = (e) => { if (e.key === 'Escape') onClose && onClose(); };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, [src, onClose]);
+    if (!src) return null;
+    return html`
+        <div
+            className="fixed inset-0 z-[80] bg-black/90 flex items-center justify-center p-3 md:p-6 cursor-zoom-out"
+            onClick=${onClose}
+            role="dialog"
+            aria-modal="true"
+        >
+            <img src=${src} alt=${alt} className="max-w-full max-h-full object-contain" />
+        </div>
     `;
 }
 

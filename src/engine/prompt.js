@@ -167,13 +167,13 @@ ${extra.join('\n')}`
 };
 
 export const endingInstruction = (turnsRemaining, mode = 'choice') => {
-    if (turnsRemaining > 1) {
+    if (turnsRemaining > 0) {
         const choiceLine = mode === 'text'
             ? 'Do not provide suggested choices; return an empty choices array.'
             : 'Still provide 4 choices.';
-        return `\n\nCRITICAL: ENDING SEQUENCE. ${turnsRemaining} beats remain, including this one. ${choiceLine} Steer toward a satisfying conclusion. Keep the JSON complete; do not truncate fields.`;
+        return `\n\nCRITICAL: ENDING SEQUENCE (END: ${turnsRemaining}). ${choiceLine} Steer toward a satisfying conclusion. Keep the JSON complete; do not truncate fields.`;
     }
-    return `\n\nCRITICAL: FINAL TURN. Deliver a satisfying conclusion. Return an empty choices array. Do NOT end with a setup question. Keep the JSON complete; do not truncate fields.`;
+    return `\n\nCRITICAL: FINAL TURN (END: 0). Deliver a satisfying conclusion. Return an empty choices array. Do NOT end with a setup question. Keep the JSON complete; do not truncate fields.`;
 };
 
 export const buildInitialPrompt = (config, initialContext) =>

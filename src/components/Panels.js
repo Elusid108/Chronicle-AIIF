@@ -1,5 +1,5 @@
 import { html } from '../html.js';
-import { BookOpen, FileText, X, Clock, Image as ImageIcon, Activity, Server, Mic, CheckCircle, CornerDownRight, Book, User as UserIcon, MapPin, Box, Bookmark } from 'lucide-react';
+import { BookOpen, FileText, X, Clock, Image as ImageIcon, Activity, Server, Mic, CheckCircle, CornerDownRight, Book, User as UserIcon, MapPin, Box, RefreshCw } from 'lucide-react';
 import { summaryToText } from '../utils/storage.js';
 import { Button } from './ui.js';
 
@@ -37,7 +37,7 @@ function TurnStats({ stats }) {
 }
 
 export function SidePanel({ app }) {
-    const { activePanel, codex, summary, currentTurnData, history, setSelectedCodexEntry, scene } = app;
+    const { activePanel, codex, summary, currentTurnData, history, setSelectedCodexEntry, scene, openLightbox } = app;
     if (activePanel !== 'summary' && activePanel !== 'codex') return null;
 
     return html`
@@ -70,11 +70,10 @@ export function SidePanel({ app }) {
                                             <div key=${name} onClick=${() => setSelectedCodexEntry({ title: name, data, category: group.key })} className="bg-gray-900/50 p-2 rounded border border-gray-800/50 hover:border-blue-900/50 hover:bg-gray-900 transition-all cursor-pointer group">
                                                 <div className="text-xs font-bold text-gray-300 group-hover:text-blue-300 transition-colors flex justify-between items-center">
                                                     <span className="truncate flex items-center gap-2 min-w-0">
-                                                        ${data && data.portraitUrl && html`<img src=${data.portraitUrl} alt="" className="w-6 h-6 rounded object-cover shrink-0 border border-gray-700" />`}
+                                                        ${data && data.portraitUrl && html`<img src=${data.portraitUrl} alt="" onClick=${(e) => { e.stopPropagation(); openLightbox && openLightbox(data.portraitUrl); }} className="w-6 h-6 rounded object-cover shrink-0 border border-gray-700 cursor-zoom-in" />`}
                                                         <span className="truncate">${name}</span>
                                                     </span>
                                                     <span className="flex items-center gap-1 shrink-0">
-                                                        ${data && data.pinned && html`<${Bookmark} size=${10} className="text-blue-400" />`}
                                                         ${data && data.source === 'player' && html`<span className="text-[8px] text-amber-400 uppercase">you</span>`}
                                                         <${CornerDownRight} size=${10} className="opacity-0 group-hover:opacity-100 text-blue-500" />
                                                     </span>
@@ -116,8 +115,45 @@ export function SidePanel({ app }) {
     `;
 }
 
+function CodexPortraitFrame({ src, alt, onOpen }) {
+    const open = (e) => {
+        if (!src || !onOpen) return;
+        e.stopPropagation();
+        onOpen(src);
+    };
+    return html`
+        <div className=${`codex-portrait-frame mb-4 ${src && onOpen ? 'cursor-zoom-in' : ''}`} onClick=${open}>
+            ${src ? html`<img src=${src} alt=${alt} className="codex-portrait-photo" />` : html`
+                <div className="codex-portrait-placeholder">
+                    <${ImageIcon} size=${28} />
+                    <span className="text-[10px] uppercase tracking-widest">Generating reference...</span>
+                </div>
+            `}
+            <svg className="codex-portrait-ornament" viewBox="0 0 1600 900" preserveAspectRatio="none" aria-hidden="true">
+                <defs>
+                    <linearGradient id="codex-frame-gold" x1="0" y1="0" x2="1" y2="1">
+                        <stop offset="0%" stopColor="#6e5224" />
+                        <stop offset="28%" stopColor="#e8d5a3" />
+                        <stop offset="52%" stopColor="#b8943e" />
+                        <stop offset="78%" stopColor="#f3e6c0" />
+                        <stop offset="100%" stopColor="#5c431c" />
+                    </linearGradient>
+                    <linearGradient id="codex-frame-edge" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="#2a1d0c" />
+                        <stop offset="100%" stopColor="#0c0904" />
+                    </linearGradient>
+                </defs>
+                <path fill="url(#codex-frame-edge)" fillRule="evenodd" d="M0 0H1600V900H0Z M40 30H1560V870H40Z" />
+                <path fill="url(#codex-frame-gold)" fillRule="evenodd" d="M8 6H1592V894H8Z M52 40H1548V860H52Z" />
+                <rect x="60" y="48" width="1480" height="804" fill="none" stroke="#1a140a" strokeWidth="2.5" />
+                <rect x="68" y="56" width="1464" height="788" fill="none" stroke="#f0e0b4" strokeWidth="1.5" opacity="0.5" />
+            </svg>
+        </div>
+    `;
+}
+
 export function CodexEntryModal({ app }) {
-    const { selectedCodexEntry, setSelectedCodexEntry, setCurrentSlideIndex, togglePanel, toggleCodexPin, mergeSelectedInto, codex } = app;
+    const { selectedCodexEntry, setSelectedCodexEntry, setCurrentSlideIndex, togglePanel, mergeSelectedInto, regenerateCodexPortrait, codex, openLightbox } = app;
     if (!selectedCodexEntry) return null;
     const { category, title, data } = selectedCodexEntry;
     const live = codex?.[category]?.[title];
@@ -136,15 +172,8 @@ export function CodexEntryModal({ app }) {
     return html`
         <div className="absolute inset-0 bg-black/80 flex items-center justify-center z-[60] p-6 backdrop-blur-sm" onClick=${() => setSelectedCodexEntry(null)}>
             <div className="w-full max-w-md bg-gray-900 border border-gray-700 rounded-xl p-6 shadow-2xl relative max-h-[90vh] overflow-y-auto custom-scrollbar" onClick=${(e) => e.stopPropagation()}>
-                <button onClick=${() => setSelectedCodexEntry(null)} className="absolute top-4 right-4 text-gray-500 hover:text-white"><${X} size=${20} /></button>
-                <div className="w-full aspect-video bg-black/60 border border-gray-800 rounded-lg overflow-hidden mb-4 flex items-center justify-center">
-                    ${entry.portraitUrl ? html`<img src=${entry.portraitUrl} alt=${title} className="w-full h-full object-cover" />` : html`
-                        <div className="flex flex-col items-center gap-2 text-gray-600">
-                            <${ImageIcon} size=${28} />
-                            <span className="text-[10px] uppercase tracking-widest">Generating reference...</span>
-                        </div>
-                    `}
-                </div>
+                <button onClick=${() => setSelectedCodexEntry(null)} className="absolute top-4 right-4 text-gray-500 hover:text-white z-10"><${X} size=${20} /></button>
+                <${CodexPortraitFrame} src=${entry.portraitUrl} alt=${title} onOpen=${openLightbox} />
                 <div className="flex items-center gap-3 mb-4 text-blue-400">
                     ${category === 'characters' && html`<${UserIcon} size=${24} />`}
                     ${category === 'places' && html`<${MapPin} size=${24} />`}
@@ -160,8 +189,8 @@ export function CodexEntryModal({ app }) {
                     </div>
                     ${(entry.aliases || []).length > 0 && field('Aliases', (entry.aliases || []).join(', '))}
                     <div className="flex gap-2">
-                        <${Button} variant="secondary" onClick=${() => toggleCodexPin(category, title)} className="flex-1 text-xs">
-                            <${Bookmark} size=${12} /> ${entry.pinned ? 'Unpin' : 'Pin in prompt'}
+                        <${Button} variant="secondary" onClick=${() => regenerateCodexPortrait(category, title)} className="flex-1 text-xs">
+                            <${RefreshCw} size=${12} /> Regenerate portrait
                         <//>
                         <span className="text-[9px] text-gray-600 self-center">${entry.source === 'player' ? 'Player-authored' : 'Model'}</span>
                     </div>

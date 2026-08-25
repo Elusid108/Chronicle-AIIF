@@ -48,15 +48,22 @@ export const mergeCodex = (prev, updates, currentTurnIndex) => {
 
     updates.forEach((item) => {
         const catKey = resolveCategory(item.category);
-        const incomingKey = normalizeKey(item.key);
+        const rawKey = normalizeKey(item.key);
+        const rawName = normalizeKey(item.name);
+        const incomingKey = rawKey || (rawName
+            ? rawName.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '')
+            : '');
         if (!catKey || !incomingKey) return;
-        const entryText = (typeof item.entry === 'string' && item.entry.trim())
-            ? item.entry.trim()
-            : incomingKey;
-        const visual = sanitizeSceneString(
-            typeof item.visual === 'string' ? item.visual : '',
-            CODEX_VISUAL_LIMIT,
-        );
+        const visualRaw = typeof item.visual === 'string' ? item.visual.trim() : '';
+        const fromEntry = typeof item.entry === 'string' ? item.entry.trim() : '';
+        const fromDesc = typeof item.description === 'string' ? item.description.trim() : '';
+        const looksLikeKey = (text) => {
+            if (!text) return false;
+            const slug = text.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+            return slug === incomingKey && !/\s/.test(text);
+        };
+        const rawEntry = [fromEntry, fromDesc, visualRaw].find((text) => text && !looksLikeKey(text)) || '';
+        const visual = sanitizeSceneString(visualRaw, CODEX_VISUAL_LIMIT);
 
         const existingKey = findExistingKey(next[catKey], incomingKey) || incomingKey;
         const existing = next[catKey][existingKey] ? normalizeEntry(next[catKey][existingKey]) : null;
@@ -78,7 +85,11 @@ export const mergeCodex = (prev, updates, currentTurnIndex) => {
             }
             next[catKey][existingKey] = {
                 ...existing,
-                description: appendDescription(existing.description, entryText),
+                description: rawEntry
+                    ? (looksLikeKey(existing.description)
+                        ? appendDescription('', rawEntry)
+                        : appendDescription(existing.description, rawEntry))
+                    : existing.description,
                 citations: cites,
                 aliases: mergedAliases,
                 status: status || existing.status,
@@ -87,7 +98,7 @@ export const mergeCodex = (prev, updates, currentTurnIndex) => {
             };
         } else {
             next[catKey][incomingKey] = {
-                description: appendDescription('', entryText),
+                description: appendDescription('', rawEntry),
                 citations: [pageNum],
                 aliases: aliases.filter((a) => a.toLowerCase() !== incomingKey.toLowerCase()),
                 status,
@@ -141,16 +152,21 @@ export const applyCompaction = (summary, split, folded) => {
     };
 };
 
-const compactForm = (key, data) => ({
-    key,
-    description: data.description,
-    aliases: data.aliases,
-    status: data.status,
-    location: data.location,
-    visual: data.visual,
-    source: data.source,
-    pinned: data.pinned,
-});
+const compactForm = (key, data) => {
+    const desc = data.description || '';
+    const slug = String(key || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+    const descSlug = desc.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+    const description = (desc && descSlug !== slug) ? desc : (data.visual || desc);
+    return {
+        key,
+        description,
+        aliases: data.aliases,
+        status: data.status,
+        location: data.location,
+        visual: data.visual,
+        source: data.source,
+    };
+};
 
 export const selectRelevantCodex = (codex, recentText = '', scene = EMPTY_SCENE, maxEntries = 24) => {
     const all = [];
@@ -167,16 +183,16 @@ export const selectRelevantCodex = (codex, recentText = '', scene = EMPTY_SCENE,
             const mentioned = names.some((n) => mentionedIn(recentText, n));
             const isProtagonist = cat === 'characters' && Object.keys(entries)[0] === key;
             const isCurrentPlace = cat === 'places' && sceneLoc && names.some((n) => mentionedIn(sceneLoc, n) || n.toLowerCase() === sceneLoc.toLowerCase());
-            const always = Boolean(data.pinned || data.source === 'player' || isProtagonist || isCurrentPlace);
+            const always = Boolean(data.source === 'player' || isProtagonist || isCurrentPlace);
             const score = (always ? 200000 : 0) + (mentioned ? 100000 : 0) + lastCite;
             all.push({ cat, key, data, score, always });
         }
     }
 
     all.sort((a, b) => b.score - a.score);
-    const pinned = all.filter((p) => p.always);
+    const forced = all.filter((p) => p.always);
     const rest = all.filter((p) => !p.always);
-    const picked = [...pinned];
+    const picked = [...forced];
     for (const row of rest) {
         if (picked.length >= maxEntries) break;
         picked.push(row);
@@ -239,9 +255,6 @@ export const updateCodexEntry = (codex, category, key, patch) => {
     return next;
 };
 
-export const pinCodexEntry = (codex, category, key, pinned) =>
-    updateCodexEntry(codex, category, key, { pinned });
-
 export const mergeCodexKeys = (codex, category, fromKey, intoKey) => {
     const next = normalizeCodex(codex);
     if (!next[category] || fromKey === intoKey) return next;
@@ -290,16 +303,15 @@ export const scrubImagePrompt = (prompt, codex) => {
     const src = normalizeCodex(codex);
     for (const cat of ['characters', 'places', 'items']) {
         for (const [key, val] of Object.entries(src[cat] || {})) {
-            const data = normalizeEntry(val);
-            names.push({ name: key, visual: visualForEntry(key, data) });
-            for (const alias of data.aliases || []) names.push({ name: alias, visual: visualForEntry(key, data) });
+            const n = normalizeKey(key);
+            if (!n || n.length < 8) continue;
+            names.push({ name: n, visual: visualForEntry(key, normalizeEntry(val)) });
         }
     }
     names.sort((a, b) => b.name.length - a.name.length);
     for (const { name, visual } of names) {
-        const n = normalizeKey(name);
-        if (!n || n.length < 2) continue;
-        out = out.replace(new RegExp(`\\b${escapeRegExp(n)}\\b`, 'gi'), visual);
+        const re = new RegExp(`(?<![A-Za-z0-9-])${escapeRegExp(name)}(?![A-Za-z0-9-])`, 'gi');
+        out = out.replace(re, visual);
     }
     return out;
 };

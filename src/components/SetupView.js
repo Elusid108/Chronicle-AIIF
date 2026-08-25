@@ -72,7 +72,7 @@ function StoryRow({ slot, isCurrent, isFirst, isLast, onOpen, onRename, onDelete
 
 export function SetupView({ app }) {
     const {
-        config, setConfig, prefs, setPrefs, initialContext, setInitialContext, status, loading, toast, dismissToast,
+        setupConfig: config, setSetupConfig: setConfig, prefs, setPrefs, initialContext, setInitialContext, status, loading, toast, dismissToast,
         startGame, resumeLatestStory, activePanel, togglePanel,
         slots, currentSlotId, loadSlotById, deleteSlotById, renameSlotById, moveSlotById, importStory,
     } = app;

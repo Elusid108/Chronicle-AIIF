@@ -148,7 +148,13 @@ export const normalizeScene = (scene) => {
     return {
         location: sanitizeSceneString(s.location, SCENE_FIELD_LIMITS.location),
         time_of_day: sanitizeSceneString(s.time_of_day, SCENE_FIELD_LIMITS.time_of_day),
-        present_characters: uniqCap(s.present_characters, 12, SCENE_FIELD_LIMITS.present_character),
+        present_characters: uniqCap(
+            (Array.isArray(s.present_characters) ? s.present_characters : []).filter(
+                (name) => !/^(you|player|protagonist|the player)$/i.test(String(name || '').trim()),
+            ),
+            12,
+            SCENE_FIELD_LIMITS.present_character,
+        ),
         goal: sanitizeSceneString(s.goal, SCENE_FIELD_LIMITS.goal),
         open_threads: uniqCap(s.open_threads, 6, SCENE_FIELD_LIMITS.open_thread),
     };

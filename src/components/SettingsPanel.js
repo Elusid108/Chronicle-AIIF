@@ -1,13 +1,13 @@
 import { html } from '../html.js';
-import { Settings, X, CheckCircle, Trash2, WifiOff, RefreshCw, Volume2, Play, Star } from 'lucide-react';
+import { Settings, X, CheckCircle, Trash2, WifiOff, RefreshCw, Volume2, Play, Star, Download } from 'lucide-react';
 import { voicesList, getVoiceMeta, CHRONICLE_VERSION } from '../constants.js';
 import { Toggle } from './ui.js';
 
 export function SettingsPanel({ app }) {
     const {
-        prefs, setPrefs, config, setConfig, mediaStatus, availableModels, modelPrefs, setModelPrefs,
+        prefs, setPrefs, config, setConfig, setupConfig, setSetupConfig, view, mediaStatus, availableModels, modelPrefs, setModelPrefs,
         fetchModels, modelListLoading, clearApiKey, togglePanel, previewVoice, previewPlaying,
-        favorites, toggleFavorite, contextChars,
+        favorites, toggleFavorite, contextChars, downloadVerboseLog,
     } = app;
 
     const sortedVoices = [...voicesList].sort((a, b) => {
@@ -19,6 +19,8 @@ export function SettingsPanel({ app }) {
     });
 
     const modelCount = availableModels.text.length || availableModels.image.length || availableModels.audio.length;
+    const modeConfig = view === 'setup' && setupConfig ? setupConfig : config;
+    const setModeConfig = view === 'setup' && setSetupConfig ? setSetupConfig : setConfig;
 
     return html`
         <div className="fixed inset-0 md:absolute md:inset-auto md:top-14 md:right-4 md:w-80 bg-gray-900 border-gray-800 md:border md:rounded-xl shadow-2xl z-50 p-4 overflow-y-auto md:max-h-[80vh] custom-scrollbar" style=${{ paddingTop: 'max(1rem, env(safe-area-inset-top))', paddingBottom: 'max(1rem, env(safe-area-inset-bottom))' }}>
@@ -83,7 +85,7 @@ export function SettingsPanel({ app }) {
                 <div>
                     <label className="text-[10px] text-blue-400 font-bold block mb-2 font-sans">MODE</label>
                     <div className="flex gap-1">
-                        ${['choice', 'text'].map((m) => html`<button key=${m} onClick=${() => setConfig({ ...config, mode: m })} className=${`flex-1 p-2 text-[10px] border rounded uppercase ${config.mode === m ? 'bg-blue-900 border-blue-500 text-white' : 'border-gray-700 text-gray-500'}`}>${m}</button>`)}
+                        ${['choice', 'text'].map((m) => html`<button key=${m} onClick=${() => setModeConfig({ ...modeConfig, mode: m })} className=${`flex-1 p-2 text-[10px] border rounded uppercase ${modeConfig.mode === m ? 'bg-blue-900 border-blue-500 text-white' : 'border-gray-700 text-gray-500'}`}>${m}</button>`)}
                     </div>
                 </div>
 
@@ -174,7 +176,20 @@ export function SettingsPanel({ app }) {
                     <${Toggle} on=${prefs.autoPlay} onClick=${() => setPrefs({ ...prefs, autoPlay: !prefs.autoPlay })} />
                 </div>
 
-                <div className="pt-4 border-t border-gray-800 text-[10px] text-gray-600">Chronicle v${CHRONICLE_VERSION}</div>
+                <div className="pt-4 border-t border-gray-800 space-y-3">
+                    <div className="flex justify-between items-center">
+                        <div>
+                            <div className="text-xs text-gray-300">Verbose logging</div>
+                            <div className="text-[9px] text-gray-600">Record engine events in memory. No turn cap. Refreshing clears the log.</div>
+                        </div>
+                        <${Toggle} on=${!!prefs.verboseLogging} onClick=${() => setPrefs({ ...prefs, verboseLogging: !prefs.verboseLogging })} />
+                    </div>
+                    <button type="button" onClick=${downloadVerboseLog} className="w-full p-2 text-[10px] uppercase tracking-widest font-bold bg-black border border-gray-700 text-gray-300 rounded hover:border-blue-500/50 hover:text-white flex items-center justify-center gap-2">
+                        <${Download} size=${12} /> Download Log
+                    </button>
+                </div>
+
+                <div className="pt-2 text-[10px] text-gray-600">Chronicle v${CHRONICLE_VERSION}</div>
             </div>
         </div>
     `;

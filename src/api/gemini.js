@@ -1,5 +1,6 @@
-import { STYLE_PROMPTS } from '../constants.js';
+import { IMAGE_NO_FRAME_CLAUSE, STYLE_PROMPTS } from '../constants.js';
 import { pcmToWav } from '../utils/audio.js';
+import { verboseEvent } from '../utils/verboseLog.js';
 
 const API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 
@@ -110,7 +111,8 @@ const throwIfBad = async (response) => {
     throw new GeminiHttpError(response.status, detail);
 };
 
-const SCHEMA_STRIP_KEYS = new Set(['maxLength', 'minLength', 'minimum', 'maximum', 'pattern']);
+const SCHEMA_STRIP_KEYS = new Set(['maxLength', 'minLength', 'minimum', 'maximum', 'pattern', 'propertyOrdering']);
+const schemaRejectedModels = new Set();
 
 export const sanitizeApiSchema = (node) => {
     if (Array.isArray(node)) return node.map(sanitizeApiSchema);
@@ -332,18 +334,26 @@ export const callGemini = async (deps, prompt, systemInstruction = '', opts = {}
     const requiresNarrative = !schema || Boolean(schema.properties?.narrative);
     const attempts = [];
     let data = null;
-    let activeSchema = schema || null;
     let schemaDropped = false;
 
     const modelsToTry = collectTextModels(modelPrefs, availableTextModels);
+    verboseEvent('gemini.text.start', {
+        models: modelsToTry,
+        stream: Boolean(stream),
+        hasSchema: Boolean(schema),
+        systemInstruction,
+        prompt,
+    });
 
     for (let mi = 0; mi < modelsToTry.length; mi++) {
         const model = modelsToTry[mi];
+        const useSchema = Boolean(schema) && !schemaRejectedModels.has(model);
         const start = performance.now();
         let fullText = '';
+        let usedSalvage = false;
         try {
             setStatus && setStatus(requiresNarrative ? `Narrative: ${model}...` : `Lore: ${model}...`);
-            const payload = buildTextPayload(prompt, systemInstruction, activeSchema);
+            const payload = buildTextPayload(prompt, systemInstruction, useSchema ? schema : null);
 
             if (stream) {
                 fullText = await streamGenerate(apiKey, model, payload, { onPartialText, onPartialBuffer, signal });
@@ -352,15 +362,25 @@ export const callGemini = async (deps, prompt, systemInstruction = '', opts = {}
                 }
                 let parsed = null;
                 try { parsed = parseModelJson(fullText); } catch { parsed = null; }
-                data = requiresNarrative
-                    ? ((parsed && parsed.narrative) ? parsed : salvageTurnData(fullText, parsed))
-                    : parsed;
+                if (requiresNarrative) {
+                    if (parsed && parsed.narrative) data = parsed;
+                    else {
+                        data = salvageTurnData(fullText, parsed);
+                        usedSalvage = Boolean(data?.narrative);
+                    }
+                } else {
+                    data = parsed;
+                }
             } else {
                 fullText = await generateContentOnce(apiKey, model, payload, signal);
                 data = parseModelJson(fullText);
             }
             if (requiresNarrative ? !data?.narrative : !data) throw new Error('Invalid model JSON');
-            attempts.push({ model, status: 'success', duration: (performance.now() - start) / 1000 });
+            const duration = (performance.now() - start) / 1000;
+            attempts.push({ model, status: 'success', duration });
+            verboseEvent('gemini.text.attempt', {
+                model, status: 'success', duration, schemaDropped, salvaged: usedSalvage, rawText: fullText, data,
+            });
             break;
         } catch (e) {
             if (isAbortError(e)) throw e;
@@ -371,19 +391,26 @@ export const callGemini = async (deps, prompt, systemInstruction = '', opts = {}
                 const salvaged = salvageTurnData(fullText, null);
                 if (salvaged?.narrative) {
                     data = salvaged;
-                    attempts.push({ model, status: 'success', duration: (performance.now() - start) / 1000 });
+                    const duration = (performance.now() - start) / 1000;
+                    attempts.push({ model, status: 'success', duration });
+                    verboseEvent('gemini.text.attempt', {
+                        model, status: 'success', duration, schemaDropped, salvaged: true, rawText: fullText, data,
+                    });
                     break;
                 }
             }
-            if (e instanceof GeminiHttpError && e.status === 400 && activeSchema && !schemaDropped) {
+            if (e instanceof GeminiHttpError && e.status === 400 && useSchema) {
+                schemaRejectedModels.add(model);
                 schemaDropped = true;
-                activeSchema = null;
                 mi -= 1;
+                verboseEvent('gemini.text.schemaDropped', { model, error: e.message });
                 console.warn(`Model ${model} rejected the schema. Retrying without responseSchema...`, e.message);
                 continue;
             }
             data = null;
-            attempts.push({ model, status: 'failed', duration: (performance.now() - start) / 1000, error: e.message });
+            const duration = (performance.now() - start) / 1000;
+            attempts.push({ model, status: 'failed', duration, error: e.message });
+            verboseEvent('gemini.text.attempt', { model, status: 'failed', duration, error: e.message, rawText: fullText });
             const canFailover = !(e instanceof GeminiHttpError && (e.status === 401 || e.status === 403));
             if (!canFailover) throw e;
             if (requiresNarrative && onPartialText) onPartialText('');
@@ -403,6 +430,7 @@ export const callGeminiText = async (deps, prompt, systemInstruction = '', opts 
     const { apiKey, modelPrefs, availableTextModels } = deps;
     const { signal } = opts;
     const modelsToTry = collectTextModels(modelPrefs, availableTextModels);
+    verboseEvent('gemini.freetext.start', { models: modelsToTry, systemInstruction, prompt });
     for (const model of modelsToTry) {
         try {
             const url = `${API_BASE}/models/${model}:generateContent`;
@@ -420,15 +448,20 @@ export const callGeminiText = async (deps, prompt, systemInstruction = '', opts 
             await throwIfBad(response);
             const result = await response.json();
             const text = extractCandidateText(result);
-            if (text) return text.trim();
+            if (text) {
+                verboseEvent('gemini.freetext.result', { model, text: text.trim() });
+                return text.trim();
+            }
         } catch (e) {
             if (isAbortError(e)) throw e;
             if (e instanceof GeminiHttpError && (e.status === 401 || e.status === 403)) {
                 throw new Error('API key rejected (401/403)');
             }
+            verboseEvent('gemini.freetext.attempt', { model, status: 'failed', error: e.message });
             console.warn(`Text model ${model} failed`, e.message);
         }
     }
+    verboseEvent('gemini.freetext.failed', {});
     throw new Error('Text generation failed');
 };
 
@@ -438,7 +471,7 @@ export const callGeminiText = async (deps, prompt, systemInstruction = '', opts 
  */
 export const generateImage = async (deps, imagePrompt, opts = {}) => {
     const { apiKey, modelPrefs, config, mediaStatus, setMediaStatus, setStatus, availableImageModels } = deps;
-    const { signal, references } = opts;
+    const { signal, references, kind } = opts;
     if (mediaStatus.images === 'disabled') return { image: null, stats: [{ model: 'disabled', status: 'skipped', duration: 0 }] };
 
     const styleKey = config.style === 'custom' ? config.styleCustom : config.style;
@@ -446,11 +479,21 @@ export const generateImage = async (deps, imagePrompt, opts = {}) => {
     const refNotes = (references || [])
         .map((ref, i) => `${i + 1}. ${ref.label || 'Reference image'}`)
         .join(' ');
-    const textOnlyPrompt = `Style: ${styleText}. ${imagePrompt}`;
+    const textOnlyPrompt = `Style: ${styleText}. ${IMAGE_NO_FRAME_CLAUSE} ${imagePrompt}`;
     const fullPrompt = refNotes
-        ? `Style: ${styleText}. Use the attached reference images to keep the same faces, clothing, objects, and places. ${refNotes} ${imagePrompt}`
+        ? `Style: ${styleText}. ${IMAGE_NO_FRAME_CLAUSE} Use the attached reference images to keep the same faces, clothing, objects, and places. ${refNotes} ${imagePrompt}`
         : textOnlyPrompt;
     const attempts = [];
+    verboseEvent('gemini.image.start', {
+        kind: kind || 'image',
+        prompt: fullPrompt,
+        textOnlyPrompt,
+        references: (references || []).map((ref) => ref.label),
+    });
+    const done = (image) => {
+        verboseEvent('gemini.image.result', { kind: kind || 'image', ok: Boolean(image), stats: attempts });
+        return { image, stats: attempts };
+    };
     const refParts = (references || []).flatMap((ref) => ([
         { text: ref.label || 'Reference image' },
         { inlineData: { mimeType: ref.mime || 'image/webp', data: ref.data } },
@@ -472,10 +515,10 @@ export const generateImage = async (deps, imagePrompt, opts = {}) => {
 
     if (mediaStatus.images === 'backup') {
         try {
-            return { image: await tryPollinations(), stats: attempts };
+            return done(await tryPollinations());
         } catch (e) {
             attempts.push({ model: 'pollinations.ai', status: 'failed', duration: 0, error: e.message });
-            return { image: null, stats: attempts };
+            return done(null);
         }
     }
 
@@ -545,15 +588,15 @@ export const generateImage = async (deps, imagePrompt, opts = {}) => {
 
     for (const modelId of imageModelsToTry) {
         const result = await tryImageModel(modelId);
-        if (result) return { image: result, stats: attempts };
+        if (result) return done(result);
     }
 
     try {
-        return { image: await tryPollinations(), stats: attempts };
+        return done(await tryPollinations());
     } catch (e3) {
         attempts.push({ model: 'pollinations.ai', status: 'failed', duration: 0, error: e3.message });
     }
-    return { image: null, stats: attempts };
+    return done(null);
 };
 
 /**
@@ -569,6 +612,7 @@ export const generateSpeech = async (deps, text, voiceOverride = null, opts = {}
     const attempts = [];
     const currentVoice = voiceOverride || prefs.voice;
     const modelToUse = modelPrefs.audioModel || 'gemini-2.5-flash-preview-tts';
+    verboseEvent('gemini.speech.start', { model: modelToUse, voice: currentVoice, chars: String(text || '').length });
     const start = performance.now();
 
     try {
@@ -594,6 +638,7 @@ export const generateSpeech = async (deps, text, voiceOverride = null, opts = {}
         const audioData = data.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
         if (audioData) {
             attempts.push({ model: modelToUse, status: 'success', duration: (performance.now() - start) / 1000 });
+            verboseEvent('gemini.speech.result', { model: modelToUse, status: 'success' });
             return { audio: pcmToWav(audioData), stats: attempts };
         }
         throw new Error('No audio data');
@@ -601,6 +646,7 @@ export const generateSpeech = async (deps, text, voiceOverride = null, opts = {}
         if (isAbortError(e)) throw e;
         attempts.push({ model: modelToUse, status: 'failed', duration: (performance.now() - start) / 1000, error: e.message });
         attempts.push({ model: 'browser_tts', status: 'success', duration: 0 });
+        verboseEvent('gemini.speech.result', { model: modelToUse, status: 'failed', fallback: 'browser_tts', error: e.message });
         return { audio: 'browser_tts', stats: attempts };
     }
 };

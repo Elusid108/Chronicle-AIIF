@@ -4,7 +4,7 @@ import {
     Home, Flag, RefreshCw, Printer, Settings, BookOpen, FileText, ChevronLeft, ChevronRight,
     Palette, Sparkles, Volume2, VolumeX, Bookmark, CornerDownRight, Send, Undo2, Pencil, X, Book, Download, AlertTriangle, Heart, MoreVertical,
 } from 'lucide-react';
-import { Button, Input, Toast } from './ui.js';
+import { Button, Input, ImageLightbox, Toast } from './ui.js';
 import { SettingsPanel } from './SettingsPanel.js';
 import { SidePanel, CodexEntryModal } from './Panels.js';
 
@@ -30,18 +30,25 @@ export function GameView({ app }) {
         displayImage, isBlurring, generatingAssets, mediaStatus, isPlaying, loading, status,
         isEnding, isFinished, turnsRemaining, userInput, setUserInput, activePanel, stats,
         isStreaming, streamingText, editingAction, selectedCodexEntry,
-        showExportModal, showExitConfirm, showEndConfirm, exportDetails, setExportDetails, toast, dismissToast,
+        showExportModal, showExitConfirm, exportDetails, setExportDetails, toast, dismissToast,
         textScrollRef, onTouchStart, onTouchMove, onTouchEnd,
         prevSlide, nextSlide, setCurrentSlideIndex, goHome, togglePanel, handleSpeak, handleTurn,
         initiateEnding, resumeStory, exportBook, exportStory, rewindTurn, regenerateTurn,
         beginEditAction, cancelEditAction, submitEditAction, setEditingActionText,
-        setShowExportModal, setShowExitConfirm, setShowEndConfirm, confirmEndingSequence,
+        setShowExportModal, setShowExitConfirm,
         retryTurnImage, retryOpening,
     } = app;
 
     const [moreOpen, setMoreOpen] = useState(false);
+    const [lightboxSrc, setLightboxSrc] = useState(null);
+    const openLightbox = (src) => { if (src) setLightboxSrc(src); };
+    const uiApp = { ...app, openLightbox };
     const settingLabel = config.setting === 'custom' ? config.settingCustom : config.setting;
+    const narrativeCompact = isStreaming || (currentTurnData && currentTurnData.type === 'ai');
     const canRewind = !isStreaming && !loading && history.filter(t => t.type === 'ai').length > 1;
+    const endingArmed = isEnding && turnsRemaining == null && !isFinished;
+    const showEndButton = !isFinished && history.length > 0 && turnsRemaining == null;
+    const inputLocked = isFinished || turnsRemaining === 0;
     const openPanel = (name) => {
         setMoreOpen(false);
         togglePanel(name);
@@ -75,12 +82,12 @@ export function GameView({ app }) {
                         <span className="hidden md:inline">Page ${currentSlideIndex + 1} of ${history.length || 1}</span>
                     </div>
                     <div className="flex gap-1 items-center">
-                        ${isEnding && !isFinished && html`<div className="text-[10px] md:text-xs text-red-500 font-bold tracking-widest animate-pulse mr-1">END: ${turnsRemaining}</div>`}
+                        ${isEnding && turnsRemaining != null && html`<div className="text-[10px] md:text-xs text-red-500 font-bold tracking-widest animate-pulse mr-1">END: ${turnsRemaining}</div>`}
                         ${isFinished && html`
                             <button onClick=${resumeStory} className="hidden md:flex text-xs bg-blue-900/30 text-blue-400 border border-blue-900/50 px-3 py-1 rounded hover:bg-blue-900/50 items-center gap-2"><${RefreshCw} size=${12} /> Resume</button>
                             <button onClick=${() => setShowExportModal(true)} className="hidden md:flex text-xs bg-emerald-900/30 text-emerald-400 border border-emerald-900/50 px-3 py-1 rounded hover:bg-emerald-900/50 items-center gap-2"><${Printer} size=${12} /> Book</button>
                         `}
-                        ${!isEnding && !isFinished && history.length > 0 && html`<button onClick=${initiateEnding} className="hidden md:flex text-xs bg-red-900/30 text-red-400 border border-red-900/50 px-3 py-1 rounded hover:bg-red-900/50 items-center gap-2"><${Flag} size=${12} /> End</button>`}
+                        ${showEndButton && html`<button onClick=${initiateEnding} className="hidden md:flex text-xs bg-red-900/30 text-red-400 border border-red-900/50 px-3 py-1 rounded hover:bg-red-900/50 items-center gap-2"><${Flag} size=${12} /> ${endingArmed ? 'Ending Initiated' : 'End'}</button>`}
                         <button onClick=${() => togglePanel('settings')} className=${`hidden md:block p-1.5 rounded hover:bg-gray-800 ${activePanel === 'settings' ? 'text-blue-400' : 'text-gray-500'}`} title="Settings"><${Settings} size=${16} /></button>
                         <button onClick=${() => togglePanel('codex')} className=${`hidden md:block p-1.5 rounded hover:bg-gray-800 ${activePanel === 'codex' ? 'text-blue-400' : 'text-gray-500'}`} title="Codex"><${BookOpen} size=${16} /></button>
                         <button onClick=${() => togglePanel('summary')} className=${`hidden md:block p-1.5 rounded hover:bg-gray-800 ${activePanel === 'summary' ? 'text-blue-400' : 'text-gray-500'}`} title="Summary"><${FileText} size=${16} /></button>
@@ -96,18 +103,18 @@ export function GameView({ app }) {
                                         <button onClick=${() => { setMoreOpen(false); resumeStory(); }} className="w-full text-left px-3 py-2.5 text-sm text-blue-300 hover:bg-gray-800 flex items-center gap-2"><${RefreshCw} size=${14} /> Resume</button>
                                         <button onClick=${() => { setMoreOpen(false); setShowExportModal(true); }} className="w-full text-left px-3 py-2.5 text-sm text-emerald-300 hover:bg-gray-800 flex items-center gap-2"><${Printer} size=${14} /> Book</button>
                                     `}
-                                    ${!isEnding && !isFinished && history.length > 0 && html`<button onClick=${openEnd} className="w-full text-left px-3 py-2.5 text-sm text-red-400 hover:bg-gray-800 flex items-center gap-2"><${Flag} size=${14} /> End story</button>`}
+                                    ${showEndButton && html`<button onClick=${openEnd} className="w-full text-left px-3 py-2.5 text-sm text-red-400 hover:bg-gray-800 flex items-center gap-2"><${Flag} size=${14} /> ${endingArmed ? 'Ending Initiated' : 'End'}</button>`}
                                 </div>
                             `}
                         </div>
                     </div>
                 </div>
 
-                <div className="bg-black border-b border-gray-900 relative min-h-0 overflow-hidden group" style=${{ flex: '0 1 auto', height: 'min(32vh, calc(var(--app-height, 100svh) * 0.32))', maxHeight: 'calc(var(--app-height, 100svh) * 0.32)' }}>
+                <div className="bg-black border-b border-gray-900 relative flex-1 min-h-0 overflow-hidden group">
                     ${(isStreaming || (currentTurnData && currentTurnData.type === 'ai')) ? (
                         (!isStreaming && displayImage) ? html`
                             <div className="w-full h-full relative">
-                                <img src=${displayImage} alt="Scene" className=${`w-full h-full object-contain mx-auto bg-black ${isBlurring ? 'blur-loading' : 'animate-in fade-in'}`} />
+                                <img src=${displayImage} alt="Scene" onClick=${() => openLightbox(displayImage)} className=${`w-full h-full object-contain mx-auto bg-black cursor-zoom-in ${isBlurring ? 'blur-loading' : 'animate-in fade-in'}`} />
                                 <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(circle_at_center,transparent_50%,rgba(0,0,0,0.4)_100%)]"></div>
                                 ${isBlurring && html`
                                     <div className="absolute inset-0 flex flex-col items-center justify-center z-10">
@@ -135,9 +142,9 @@ export function GameView({ app }) {
                     <div className="absolute bottom-4 right-4 z-20"><${Button} variant="secondary" onClick=${nextSlide} disabled=${currentSlideIndex === history.length - 1 || isStreaming} className="w-10 h-10 rounded-full !p-0 shadow-xl"><${ChevronRight} size=${20} /><//></div>
                 </div>
 
-                <div className="flex-1 flex flex-col min-h-0 relative">
+                <div className=${`flex flex-col min-h-0 relative ${narrativeCompact ? 'shrink-0' : 'flex-1'}`}>
                     ${isStreaming ? html`
-                        <div className="flex-1 overflow-y-auto bg-black px-6 pt-6 pb-6 md:p-8 custom-scrollbar">
+                        <div className="overflow-y-auto bg-black px-4 pt-3 pb-2 md:px-8 custom-scrollbar" style=${narrativeCompact ? { maxHeight: '22vh' } : undefined}>
                             <div className="max-w-3xl mx-auto flex flex-col items-center text-center">
                                 ${prefs.statsEnabled && html`<${StatHud} stats=${stats} />`}
                                 <div className="prose prose-invert w-full">
@@ -147,16 +154,16 @@ export function GameView({ app }) {
                             </div>
                         </div>
                     ` : (currentTurnData && currentTurnData.type === 'ai') ? html`
-                        <div className="absolute top-2 right-3 md:top-4 md:right-6 z-30 flex gap-1.5 md:gap-2">
+                        <div className="absolute top-1 right-2 md:top-2 md:right-4 z-30 flex gap-1.5">
                             ${isLatestSlide && !isFinished && !loading && html`
-                                <button onClick=${regenerateTurn} className="p-2 md:p-3 rounded-full shadow-lg bg-black/60 text-gray-400 border border-gray-700 hover:text-white hover:bg-black/80 backdrop-blur-md" title="Regenerate this turn"><${RefreshCw} size=${16} /></button>
-                                <button onClick=${beginEditAction} className="p-2 md:p-3 rounded-full shadow-lg bg-black/60 text-gray-400 border border-gray-700 hover:text-white hover:bg-black/80 backdrop-blur-md" title="Edit your last action"><${Pencil} size=${16} /></button>
+                                <button onClick=${regenerateTurn} className="p-2 rounded-full shadow-lg bg-black/60 text-gray-400 border border-gray-700 hover:text-white hover:bg-black/80 backdrop-blur-md" title="Regenerate this turn"><${RefreshCw} size=${16} /></button>
+                                <button onClick=${beginEditAction} className="p-2 rounded-full shadow-lg bg-black/60 text-gray-400 border border-gray-700 hover:text-white hover:bg-black/80 backdrop-blur-md" title="Edit your last action"><${Pencil} size=${16} /></button>
                             `}
-                            <button onClick=${() => handleSpeak(currentTurnData)} className=${`p-2 md:p-3 rounded-full shadow-lg transition-all duration-300 backdrop-blur-md border ${isPlaying ? 'bg-blue-600/90 text-white border-blue-400 scale-110' : 'bg-black/60 text-gray-400 border-gray-700 hover:text-white hover:bg-black/80'} ${(generatingAssets.audio && !currentTurnData.audio) || mediaStatus.audio === 'disabled' ? 'opacity-50 cursor-not-allowed' : ''}`} disabled=${(generatingAssets.audio && !currentTurnData.audio) || mediaStatus.audio === 'disabled'}>
+                            <button onClick=${() => handleSpeak(currentTurnData)} className=${`p-2 rounded-full shadow-lg transition-all duration-300 backdrop-blur-md border ${isPlaying ? 'bg-blue-600/90 text-white border-blue-400 scale-110' : 'bg-black/60 text-gray-400 border-gray-700 hover:text-white hover:bg-black/80'} ${(generatingAssets.audio && !currentTurnData.audio) || mediaStatus.audio === 'disabled' ? 'opacity-50 cursor-not-allowed' : ''}`} disabled=${(generatingAssets.audio && !currentTurnData.audio) || mediaStatus.audio === 'disabled'}>
                                 ${isPlaying ? html`<${VolumeX} size=${18} />` : html`<${Volume2} size=${18} />`}
                             </button>
                         </div>
-                        <div ref=${textScrollRef} className="flex-1 overflow-y-auto bg-black px-6 pt-14 pb-6 md:p-8 custom-scrollbar">
+                        <div ref=${textScrollRef} className="overflow-y-auto bg-black px-4 pt-10 pb-2 md:px-8 custom-scrollbar" style=${{ maxHeight: '22vh' }}>
                             <div className="max-w-3xl mx-auto flex flex-col items-center text-center">
                                 ${prefs.statsEnabled && isLatestSlide && html`<${StatHud} stats=${stats} />`}
                                 <div className="prose prose-invert prose-p:text-gray-300 prose-p:font-serif prose-p:leading-loose w-full">
@@ -195,7 +202,7 @@ export function GameView({ app }) {
                                     <${Button} variant="secondary" onClick=${cancelEditAction} className="shrink-0"><${X} size=${14} /><//>
                                 </div>
                             </div>
-                        ` : (isLatestSlide && !loading && !isStreaming && !isFinished && currentTurnData?.type === 'ai') ? html`
+                        ` : (isLatestSlide && !loading && !isStreaming && !inputLocked && currentTurnData?.type === 'ai') ? html`
                             <div className="animate-in fade-in slide-in-from-bottom-2">
                                 ${config.mode !== 'text' && currentTurnData?.choices?.length > 0 ? html`
                                     <div className="grid grid-cols-2 gap-2">${currentTurnData.choices.slice(0, 4).map((choice, i) => html`<button key=${i} onClick=${() => handleTurn(choice)} className="p-2 text-left bg-gray-900 hover:bg-gray-800 border border-gray-800 hover:border-blue-500/50 rounded-lg text-gray-300 transition-all min-h-[2.75rem] flex items-start font-sans text-xs md:text-sm whitespace-normal break-words"><span className="font-bold text-blue-500 mr-1.5 shrink-0">${i + 1}.</span> <span className="min-w-0">${choice}</span></button>`)}</div>
@@ -229,8 +236,9 @@ export function GameView({ app }) {
                 </div>
 
                 ${activePanel === 'settings' && html`<${SettingsPanel} app=${app} />`}
-                <${SidePanel} app=${app} />
-                <${CodexEntryModal} app=${app} />
+                <${SidePanel} app=${uiApp} />
+                <${CodexEntryModal} app=${uiApp} />
+                ${lightboxSrc && html`<${ImageLightbox} src=${lightboxSrc} alt="Enlarged" onClose=${() => setLightboxSrc(null)} />`}
 
                 ${showExportModal && html`
                     <div className="absolute inset-0 bg-black/90 flex items-center justify-center z-50 p-6">
@@ -254,19 +262,6 @@ export function GameView({ app }) {
                             <div className="flex gap-3 justify-center">
                                 <${Button} onClick=${() => setShowExitConfirm(false)} variant="secondary">Cancel<//>
                                 <${Button} onClick=${() => app.confirmAbandon()} variant="danger">Abandon Path<//>
-                            </div>
-                        </div>
-                    </div>
-                `}
-                ${showEndConfirm && html`
-                    <div className="absolute inset-0 bg-black/90 flex items-center justify-center z-50 p-6">
-                        <div className="w-full max-w-sm bg-gray-900 border border-blue-900/50 rounded-xl p-6 text-center shadow-2xl">
-                            <${Flag} size=${32} className="text-blue-500 mx-auto mb-4" />
-                            <h3 className="text-lg font-bold text-white mb-2">Initiate Finale?</h3>
-                            <p className="text-gray-400 text-sm mb-6">The story will conclude in <span className="font-bold text-white">${prefs.endingLength} turns</span>. Make them count.</p>
-                            <div className="flex gap-3 justify-center">
-                                <${Button} onClick=${() => setShowEndConfirm(false)} variant="secondary">Cancel<//>
-                                <${Button} onClick=${confirmEndingSequence} className="bg-blue-600 hover:bg-blue-500">Begin Ending<//>
                             </div>
                         </div>
                     </div>

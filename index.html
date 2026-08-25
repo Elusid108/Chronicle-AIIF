@@ -77,6 +77,40 @@
             filter: blur(12px) brightness(0.6);
             transition: filter 1s ease;
         }
+
+        .codex-portrait-frame {
+            position: relative;
+            width: 100%;
+            aspect-ratio: 16 / 9;
+            background: #050505;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 0 0 1px #3a2a12, 0 10px 28px rgba(0, 0, 0, 0.55);
+        }
+        .codex-portrait-photo {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+        }
+        .codex-portrait-placeholder {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            color: #4b5563;
+            background: rgba(0, 0, 0, 0.6);
+        }
+        .codex-portrait-ornament {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+        }
     </style>
 </head>
 <body>

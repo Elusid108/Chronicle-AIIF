@@ -11,14 +11,15 @@ import {
 } from './utils/storage.js';
 import { fetchAvailableModels, generateSpeech } from './api/gemini.js';
 import { buildInitialPrompt, buildSystemPrompt } from './engine/prompt.js';
-import { mergeCodexKeys, overlayCodexRuntime, pinCodexEntry, updateCodexEntry } from './engine/memory.js';
+import { mergeCodexKeys, overlayCodexRuntime, updateCodexEntry } from './engine/memory.js';
 import {
     EMPTY_SUMMARY, abortActiveTurn, abortAllAssetSignals, abortAssetSignal, attachSceneImage,
     generateEntryPortrait, lastAiIndex, processTurn, rebuildBase,
     startAssetSignal,
 } from './engine/session.js';
-import { revokeHistoryImages } from './utils/images.js';
-import { ACTIVE_SAVE_ID, copyCodexImageKey, copyCodexImages, copyImages, getCodexImage } from './utils/idb.js';
+import { revokeHistoryImages, revokeIfBlobUrl } from './utils/images.js';
+import { ACTIVE_SAVE_ID, copyCodexImageKey, copyCodexImages, copyImages, deleteCodexImage, getCodexImage } from './utils/idb.js';
+import { downloadVerboseLog, setVerboseEnabled } from './utils/verboseLog.js';
 import { ApiKeyModal } from './components/ApiKeyModal.js';
 import { SetupView } from './components/SetupView.js';
 import { GameView } from './components/GameView.js';
@@ -34,6 +35,7 @@ const DEFAULT_PREFS = {
     consistencyCheck: false,
     keepLastNImages: 4,
     pacing: 'standard',
+    verboseLogging: false,
 };
 
 export function App() {
@@ -42,6 +44,7 @@ export function App() {
     const [status, setStatus] = useState('');
 
     const [config, setConfig] = useState({ ...DEFAULT_CONFIG });
+    const [setupConfig, setSetupConfig] = useState({ ...DEFAULT_CONFIG });
     const [prefs, setPrefs] = useState(() => ({ ...DEFAULT_PREFS, ...loadJSON(STORAGE_KEYS.prefs, {}) }));
     const [mediaStatus, setMediaStatus] = useState({ images: 'active', audio: 'active' });
 
@@ -58,7 +61,6 @@ export function App() {
 
     const [showExportModal, setShowExportModal] = useState(false);
     const [showExitConfirm, setShowExitConfirm] = useState(false);
-    const [showEndConfirm, setShowEndConfirm] = useState(false);
     const [exportDetails, setExportDetails] = useState({ title: 'The Unnamed Chronicle', author: 'Anonymous' });
 
     const [history, setHistory] = useState([]);
@@ -143,6 +145,7 @@ export function App() {
     }, []);
 
     useEffect(() => { saveJSON(STORAGE_KEYS.prefs, prefs); }, [prefs]);
+    useEffect(() => { setVerboseEnabled(!!prefs.verboseLogging); }, [prefs.verboseLogging]);
     useEffect(() => { saveJSON(STORAGE_KEYS.modelPrefs, modelPrefs); }, [modelPrefs]);
     useEffect(() => { saveJSON(STORAGE_KEYS.favVoices, favorites); }, [favorites]);
 
@@ -151,6 +154,7 @@ export function App() {
     }, [apiKey]);
 
     useEffect(() => {
+        if (view !== 'game') return;
         if (history.length === 0) return;
         const writeId = ++saveWriteId.current;
         let cancelled = false;
@@ -168,7 +172,7 @@ export function App() {
             }
         })();
         return () => { cancelled = true; };
-    }, [history, codex, summary, scene, styleCard, currentSlideIndex, isEnding, turnsRemaining, isFinished, exportDetails, config, initialContext, stats, currentSlotId, prefs.keepLastNImages]);
+    }, [view, history, codex, summary, scene, styleCard, currentSlideIndex, isEnding, turnsRemaining, isFinished, exportDetails, config, initialContext, stats, currentSlotId, prefs.keepLastNImages]);
 
     useEffect(() => {
         let animationFrame;
@@ -238,7 +242,9 @@ export function App() {
         availableTextModels: (availableModels.text || []).map((m) => m.id),
     });
     const imageDeps = () => ({
-        apiKey, modelPrefs, config, mediaStatus, setMediaStatus, setStatus,
+        apiKey, modelPrefs,
+        config: snapshotRef.current.config || config,
+        mediaStatus, setMediaStatus, setStatus,
         availableImageModels: (availableModels.image || []).map((m) => m.id),
     });
     const speechDeps = () => ({ apiKey, modelPrefs, prefs, mediaStatus, setMediaStatus, setStatus });
@@ -374,7 +380,7 @@ export function App() {
         turnsRemaining: null,
         isFinished: false,
         exportDetails: { title: 'The Unnamed Chronicle', author: 'Anonymous' },
-        config,
+        config: { ...setupConfig },
         initialContext,
     });
 
@@ -386,7 +392,8 @@ export function App() {
         saveWriteId.current += 1;
         await initStorage();
         await clearActiveSave();
-        const fresh = emptyStoryState();
+        const storyConfig = { ...setupConfig };
+        const fresh = { ...emptyStoryState(), config: storyConfig };
         const entry = await createStorySlot(fresh, 0);
         const resetSnap = {
             ...snapshotRef.current,
@@ -394,6 +401,7 @@ export function App() {
             currentSlotId: entry.id,
         };
         snapshotRef.current = resetSnap;
+        setConfig(storyConfig);
         setCurrentSlotIdState(entry.id);
         setSlots(await listSlots());
         setHistory([]);
@@ -409,8 +417,13 @@ export function App() {
         setIsStreaming(true);
         setStreamingText('');
         setLoading(false);
-        runTurn('initial', buildInitialPrompt(config, initialContext), {
-            history: [], codex: { ...DEFAULT_CODEX }, summary: { ...EMPTY_SUMMARY }, stats: {}, scene: { ...EMPTY_SCENE },
+        runTurn('initial', buildInitialPrompt(storyConfig, initialContext), {
+            history: [],
+            codex: { ...DEFAULT_CODEX },
+            summary: { ...EMPTY_SUMMARY },
+            stats: {},
+            scene: { ...EMPTY_SCENE },
+            styleCard: '',
         });
     };
 
@@ -426,10 +439,14 @@ export function App() {
             summary: snapshotRef.current.summary || { ...EMPTY_SUMMARY },
             stats: {},
             scene: snapshotRef.current.scene || { ...EMPTY_SCENE },
+            styleCard: '',
         });
     };
 
-    const handleTurn = (input) => { if (input && input.trim()) runTurn('continue', input); };
+    const handleTurn = (input) => {
+        if (isFinished || turnsRemaining === 0) return;
+        if (input && input.trim()) runTurn('continue', input);
+    };
 
     const applyBase = (b) => {
         abortAllAssetSignals(assetAbortMap);
@@ -442,6 +459,19 @@ export function App() {
         if (b.styleCard !== undefined) setStyleCard(b.styleCard);
         setCurrentSlideIndex(Math.max(0, b.history.length - 1));
         setIsFinished(false); setIsEnding(false); setTurnsRemaining(null);
+        snapshotRef.current = {
+            ...snapshotRef.current,
+            history: b.history,
+            codex: b.codex,
+            summary: b.summary,
+            stats: b.stats,
+            scene: b.scene || { ...EMPTY_SCENE },
+            styleCard: b.styleCard !== undefined ? b.styleCard : snapshotRef.current.styleCard,
+            currentSlideIndex: Math.max(0, b.history.length - 1),
+            isFinished: false,
+            isEnding: false,
+            turnsRemaining: null,
+        };
     };
 
     const rewindTurn = () => {
@@ -466,7 +496,12 @@ export function App() {
         if (lastTurn.userActionPreceding == null) {
             setStyleCard('');
             runTurn('initial', buildInitialPrompt(config, initialContext), {
-                history: [], codex: { ...DEFAULT_CODEX }, summary: { ...EMPTY_SUMMARY }, stats: {}, scene: { ...EMPTY_SCENE },
+                history: [],
+                codex: { ...DEFAULT_CODEX },
+                summary: { ...EMPTY_SUMMARY },
+                stats: {},
+                scene: { ...EMPTY_SCENE },
+                styleCard: '',
             });
         } else {
             runTurn('continue', lastTurn.userActionPreceding, base);
@@ -496,16 +531,20 @@ export function App() {
         runTurn('continue', text, base);
     };
 
-    const initiateEnding = () => setShowEndConfirm(true);
-    const confirmEndingSequence = () => {
-        const remaining = Math.max(1, Number(prefs.endingLength) || 5);
-        snapshotRef.current = { ...snapshotRef.current, isEnding: true, turnsRemaining: remaining };
-        setShowEndConfirm(false);
+    const initiateEnding = () => {
+        if (isFinished || typeof turnsRemaining === 'number') return;
+        if (isEnding) {
+            snapshotRef.current = { ...snapshotRef.current, isEnding: false, turnsRemaining: null };
+            setIsEnding(false);
+            setTurnsRemaining(null);
+            return;
+        }
+        snapshotRef.current = { ...snapshotRef.current, isEnding: true, turnsRemaining: null };
         setIsEnding(true);
-        setTurnsRemaining(remaining);
-        runTurn('continue', 'The tale now turns toward its ending. Begin the finale.');
+        setTurnsRemaining(null);
     };
     const resumeStory = () => {
+        snapshotRef.current = { ...snapshotRef.current, isEnding: false, isFinished: false, turnsRemaining: null };
         setIsEnding(false); setIsFinished(false); setTurnsRemaining(null);
         const lastTurn = history[history.length - 1];
         if (lastTurn && lastTurn.type !== 'chapter_marker') {
@@ -560,14 +599,30 @@ export function App() {
         });
     };
 
-    const toggleCodexPin = (category, key) => {
+    const regenerateCodexPortrait = async (category, key) => {
+        const entry = snapshotRef.current.codex?.[category]?.[key];
+        if (!entry) return;
+        const slotId = snapshotRef.current.currentSlotId || ACTIVE_SAVE_ID;
+        revokeIfBlobUrl(entry.portraitUrl);
+        try {
+            await deleteCodexImage(slotId, category, key);
+            if (slotId !== ACTIVE_SAVE_ID) await deleteCodexImage(ACTIVE_SAVE_ID, category, key);
+        } catch { /* generate anyway */ }
         setCodex((prev) => {
-            const current = prev[category]?.[key];
-            const next = pinCodexEntry(prev, category, key, !(current && current.pinned));
-            const data = next[category]?.[key];
-            setSelectedCodexEntry((sel) => (sel && sel.category === category && sel.title === key ? { ...sel, data } : sel));
-            return next;
+            if (!prev[category]?.[key]) return prev;
+            const nextEntry = { ...prev[category][key], hasPortrait: false, portraitUrl: '' };
+            setSelectedCodexEntry((sel) => (
+                sel && sel.category === category && sel.title === key ? { ...sel, data: nextEntry } : sel
+            ));
+            return { ...prev, [category]: { ...prev[category], [key]: nextEntry } };
         });
+        const signal = startAssetSignal(assetAbortMap, `portrait:${category}:${key}`);
+        generateEntryPortrait(turnIo(), {
+            category,
+            key,
+            data: { ...entry, hasPortrait: false, portraitUrl: '' },
+            signal,
+        }).catch(() => {});
     };
 
     const mergeSelectedInto = (intoKey) => {
@@ -608,7 +663,29 @@ export function App() {
         setCurrentSlideIndex(withImages.currentSlideIndex);
         setIsEnding(withImages.isEnding); setTurnsRemaining(withImages.turnsRemaining); setIsFinished(withImages.isFinished);
         setExportDetails(withImages.exportDetails);
-        setConfig({ ...DEFAULT_CONFIG, ...withImages.config });
+        const loadedConfig = { ...DEFAULT_CONFIG, ...withImages.config };
+        const loadedSummary = normalizeSummary(withImages.summary);
+        const loadedScene = withImages.scene || { ...EMPTY_SCENE };
+        const loadedSlotId = imageSaveId && imageSaveId !== ACTIVE_SAVE_ID
+            ? imageSaveId
+            : snapshotRef.current.currentSlotId;
+        snapshotRef.current = {
+            ...snapshotRef.current,
+            history: withImages.history,
+            codex: withPortraits,
+            summary: loadedSummary,
+            scene: loadedScene,
+            styleCard: withImages.styleCard || '',
+            stats: withImages.stats || {},
+            currentSlideIndex: withImages.currentSlideIndex,
+            isEnding: withImages.isEnding,
+            turnsRemaining: withImages.turnsRemaining,
+            isFinished: withImages.isFinished,
+            config: loadedConfig,
+            initialContext: withImages.initialContext,
+            currentSlotId: loadedSlotId,
+        };
+        setConfig(loadedConfig);
         setInitialContext(withImages.initialContext);
         setView('game'); setActivePanel(null);
         withImages.history.forEach((turn, idx) => {
@@ -716,7 +793,7 @@ export function App() {
     if (!apiKey) return html`<${ApiKeyModal} onSave=${handleKeySave} />`;
 
     const app = {
-        config, setConfig, prefs, setPrefs, mediaStatus,
+        view, config, setConfig, setupConfig, setSetupConfig, prefs, setPrefs, mediaStatus,
         availableModels, modelPrefs, setModelPrefs, modelListLoading, fetchModels,
         favorites, toggleFavorite, previewVoice, previewPlaying,
         initialContext, setInitialContext, status, loading,
@@ -726,14 +803,14 @@ export function App() {
         history, codex, summary, scene, stats, currentSlideIndex, currentTurnData, isLatestSlide,
         displayImage, isBlurring, generatingAssets, isPlaying, handleSpeak,
         userInput, setUserInput, handleTurn,
-        isEnding, isFinished, turnsRemaining, initiateEnding, resumeStory, confirmEndingSequence,
+        isEnding, isFinished, turnsRemaining, initiateEnding, resumeStory,
         exportBook, exportStory, exportDetails, setExportDetails,
-        showExportModal, setShowExportModal, showExitConfirm, setShowExitConfirm, showEndConfirm, setShowEndConfirm, confirmAbandon,
+        showExportModal, setShowExportModal, showExitConfirm, setShowExitConfirm, confirmAbandon,
         selectedCodexEntry, setSelectedCodexEntry, setCurrentSlideIndex,
-        saveCodexEdits, toggleCodexPin, mergeSelectedInto,
+        saveCodexEdits, mergeSelectedInto, regenerateCodexPortrait,
         isStreaming, streamingText, editingAction, setEditingActionText, beginEditAction, cancelEditAction, submitEditAction,
         rewindTurn, regenerateTurn, goHome, toast, dismissToast, contextChars,
-        retryTurnImage, retryOpening, ensureCodexPortrait,
+        retryTurnImage, retryOpening, ensureCodexPortrait, downloadVerboseLog,
         textScrollRef, onTouchStart, onTouchMove, onTouchEnd, prevSlide, nextSlide,
     };
 
