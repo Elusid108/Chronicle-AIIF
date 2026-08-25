@@ -1,5 +1,5 @@
 import { EMPTY_SCENE, EMPTY_SUMMARY } from '../constants.js';
-import { callGemini, callGeminiText, extractJsonStringField, generateImage, generateSpeech, isAbortError } from '../api/gemini.js';
+import { callGemini, callGeminiText, generateImage, generateSpeech, isAbortError } from '../api/gemini.js';
 import { ACTIVE_SAVE_ID, getCodexImage, pruneTurnImages, putCodexImage, putTurnImage } from '../utils/idb.js';
 import { blobToInlineData, snapshotImage } from '../utils/images.js';
 import { normalizeEntry, normalizeSummary, summaryToText } from '../utils/storage.js';
@@ -241,36 +241,56 @@ export const generateEntryPortrait = async (io, { category, key, data, signal })
     });
 };
 
+const PORTRAIT_CONCURRENCY = 4;
+
+const runPool = async (items, limit, worker) => {
+    const list = Array.isArray(items) ? items : [];
+    if (!list.length) return;
+    let cursor = 0;
+    const launch = async () => {
+        while (cursor < list.length) {
+            const item = list[cursor];
+            cursor += 1;
+            await worker(item);
+        }
+    };
+    await Promise.all(Array.from({ length: Math.min(Math.max(1, limit), list.length) }, () => launch()));
+};
+
+const hydratePortraitFromStore = async (io, row, slotId) => {
+    const blob = await getCodexImage(slotId, row.cat, row.key) || await getCodexImage(ACTIVE_SAVE_ID, row.cat, row.key);
+    if (!blob) return false;
+    const url = URL.createObjectURL(blob);
+    io.setCodex((prev) => {
+        if (!prev[row.cat]?.[row.key]) return prev;
+        const nextEntry = { ...normalizeEntry(prev[row.cat][row.key]), hasPortrait: true, portraitUrl: url };
+        if (io.setSelectedCodexEntry) {
+            io.setSelectedCodexEntry((sel) => (
+                sel && sel.category === row.cat && sel.title === row.key ? { ...sel, data: nextEntry } : sel
+            ));
+        }
+        return { ...prev, [row.cat]: { ...prev[row.cat], [row.key]: nextEntry } };
+    });
+    return true;
+};
+
 export const generateMissingPortraits = async (io, entries, signal, codexHint) => {
-    for (const row of entries || []) {
-        if (signal?.aborted) return;
+    await runPool(entries, PORTRAIT_CONCURRENCY, async (row) => {
+        if (signal?.aborted || !row) return;
         const live = io.getSnapshot();
         const data = codexHint?.[row.cat]?.[row.key] || live.codex?.[row.cat]?.[row.key];
-        if (!data || data.portraitUrl) continue;
+        if (!data || data.portraitUrl) return;
         const slotId = live.currentSlotId || ACTIVE_SAVE_ID;
         try {
-            const blob = await getCodexImage(slotId, row.cat, row.key) || await getCodexImage(ACTIVE_SAVE_ID, row.cat, row.key);
-            if (blob) {
-                const url = URL.createObjectURL(blob);
-                io.setCodex((prev) => {
-                    if (!prev[row.cat]?.[row.key]) return prev;
-                    const nextEntry = { ...normalizeEntry(prev[row.cat][row.key]), hasPortrait: true, portraitUrl: url };
-                    if (io.setSelectedCodexEntry) {
-                        io.setSelectedCodexEntry((sel) => (
-                            sel && sel.category === row.cat && sel.title === row.key ? { ...sel, data: nextEntry } : sel
-                        ));
-                    }
-                    return { ...prev, [row.cat]: { ...prev[row.cat], [row.key]: nextEntry } };
-                });
-                continue;
-            }
+            if (await hydratePortraitFromStore(io, row, slotId)) return;
         } catch { /* generate */ }
+        if (signal?.aborted) return;
         try {
             await generateEntryPortrait(io, { category: row.cat, key: row.key, data, signal });
         } catch (e) {
             if (isAbortError(e)) return;
         }
-    }
+    });
 };
 
 const prepareSceneImageRefs = async (io, codex, scene, narrative, slotId, signal) => {
@@ -384,76 +404,12 @@ export const processTurn = async (io, promptType, inputVal, base) => {
 
     const modelPrompt = promptType === 'initial' ? inputVal : buildActionPrompt(inputVal);
     const userAction = promptType === 'initial' ? null : inputVal;
-    const turnIndex = baseHistory.length;
-    const wantImage = snap.mediaStatus?.images !== 'disabled';
-    let imageStarted = false;
-    let historyReady = false;
-    let pendingImage = null;
-
-    const applyPendingImage = () => {
-        if (!pendingImage || !historyReady) return;
-        const result = pendingImage;
-        pendingImage = null;
-        patchTurnAt(setHistory, turnIndex, (turn) => ({
-            ...turn,
-            image: result.url,
-            stats: { ...turn.stats, image: result.stats },
-        }));
-        if (result.blob && result.keepLastN > 0) {
-            persistTurnImageBlob(result.slotId, turnIndex, result.blob, result.keepLastN).catch(() => {});
-        }
-        if (!result.url) showToast('error', 'Could not generate the scene image.');
-    };
-
-    const startSceneImage = (prompt, codexForRefs, sceneForRefs, narrative) => {
-        if (imageStarted || !wantImage || !prompt) return;
-        imageStarted = true;
-        const live = getSnapshot();
-        const slotId = live.currentSlotId || ACTIVE_SAVE_ID;
-        const keepLastN = live.prefs?.keepLastNImages || 0;
-        const imageSignal = startAssetSignal(assetAbortMap, `scene:${turnIndex}`);
-        setGeneratingAssets((prev) => ({ ...prev, image: true }));
-        const finishImage = () => {
-            completeAssetJob(assetAbortMap, `scene:${turnIndex}`);
-            if (!hasAssetJobs(assetAbortMap, 'scene:')) {
-                setGeneratingAssets((prev) => ({ ...prev, image: false }));
-            }
-        };
-        (async () => {
-            try {
-                const scrubbed = scrubImagePrompt(prompt, codexForRefs);
-                const references = await prepareSceneImageRefs(io, codexForRefs, sceneForRefs, narrative, slotId, imageSignal);
-                if (imageSignal.aborted) return;
-                const imageResult = await generateImage(imageDeps(), scrubbed, { signal: imageSignal, references });
-                if (imageSignal.aborted) return;
-                let url = imageResult.image;
-                let blob = null;
-                if (url) {
-                    const snapshotted = await snapshotImage(url);
-                    if (imageSignal.aborted) return;
-                    url = snapshotted.url || url;
-                    blob = snapshotted.blob;
-                }
-                pendingImage = { url, blob, stats: imageResult.stats, slotId, keepLastN };
-                applyPendingImage();
-            } catch (e) {
-                if (isAbortError(e)) return;
-                showToast('error', `Image failed: ${e.message || 'unknown error'}`);
-            } finally {
-                finishImage();
-            }
-        })();
-    };
 
     try {
         const { data: turnData, stats: textStats } = await callGemini(textDeps(), modelPrompt, systemPrompt, {
             schema: buildTurnSchema(config.mode),
             stream: streaming,
             onPartialText: streaming ? (t) => setStreamingText(t) : undefined,
-            onPartialBuffer: streaming ? (buf) => {
-                const prompt = extractJsonStringField(buf, 'image_prompt', { completeOnly: true });
-                if (prompt) startSceneImage(prompt, baseCodex, baseScene, extractJsonStringField(buf, 'narrative') || '');
-            } : undefined,
             signal,
         });
         if (signal.aborted) return;
@@ -483,17 +439,11 @@ export const processTurn = async (io, promptType, inputVal, base) => {
         }
 
         setIsStreaming(false); setStreamingText(''); setLoading(false);
-        historyReady = true;
-        applyPendingImage();
 
         const live = getSnapshot();
         const fetchImage = live.mediaStatus?.images !== 'disabled';
         const fetchAudio = live.mediaStatus?.audio !== 'disabled' && !!live.prefs?.autoPlay;
-        if (!imageStarted && fetchImage) {
-            startSceneImage(turnData.image_prompt, baseCodex, folded.newScene, folded.newTurn.narrative);
-        }
-        if (!fetchImage) setGeneratingAssets((prev) => ({ ...prev, image: false }));
-        setGeneratingAssets((prev) => ({ ...prev, audio: fetchAudio }));
+        setGeneratingAssets((prev) => ({ ...prev, image: Boolean(fetchImage && turnData.image_prompt), audio: fetchAudio }));
         setStatus('Generating assets...');
 
         if (fetchAudio && turnData.narrative) {
@@ -529,29 +479,76 @@ export const processTurn = async (io, promptType, inputVal, base) => {
             }).catch(() => { /* ignore */ });
         }
 
-        const loreSignal = startAssetSignal(assetAbortMap, `lore:${folded.newTurnIndex}`);
-        backfillCodexFromNarrative(textDeps(), {
-            narrative: folded.newTurn.narrative,
-            codex: folded.newCodex,
-            signal: loreSignal,
-        }).then((extra) => {
-            if (loreSignal.aborted || !extra.length) return;
-            const prev = getSnapshot().codex;
-            const merged = mergeCodex(prev, extra, folded.newTurnIndex);
-            const newcomers = diffNewCodexEntries(prev, merged);
-            setCodex(merged);
-            patchTurnAt(setHistory, folded.newTurnIndex, (turn) => ({
-                ...turn,
-                codex_updates: [...(turn.codex_updates || []), ...extra],
-            }));
-            const portraitSignal = startAssetSignal(assetAbortMap, `portraits:${folded.newTurnIndex}:late`);
-            generateMissingPortraits(io, newcomers, portraitSignal, merged);
-        }).catch((e) => {
-            if (isAbortError(e)) return;
-        });
+        const paintPage = async () => {
+            if (!fetchImage || !turnData.image_prompt) {
+                setGeneratingAssets((prev) => ({ ...prev, image: false }));
+                return;
+            }
+            let handedToScene = false;
+            try {
+                let paintingCodex = folded.newCodex;
+                const loreSignal = startAssetSignal(assetAbortMap, `lore:${folded.newTurnIndex}`);
+                try {
+                    const extra = await backfillCodexFromNarrative(textDeps(), {
+                        narrative: folded.newTurn.narrative,
+                        codex: folded.newCodex,
+                        signal: loreSignal,
+                    });
+                    if (!loreSignal.aborted && extra.length) {
+                        const prev = getSnapshot().codex || folded.newCodex;
+                        paintingCodex = mergeCodex(prev, extra, folded.newTurnIndex);
+                        setCodex(paintingCodex);
+                        patchTurnAt(setHistory, folded.newTurnIndex, (turn) => ({
+                            ...turn,
+                            codex_updates: [...(turn.codex_updates || []), ...extra],
+                        }));
+                    }
+                } catch (e) {
+                    if (isAbortError(e)) return;
+                } finally {
+                    completeAssetJob(assetAbortMap, `lore:${folded.newTurnIndex}`);
+                }
+                if (signal.aborted) return;
 
-        const portraitSignal = startAssetSignal(assetAbortMap, `portraits:${folded.newTurnIndex}`);
-        generateMissingPortraits(io, diffNewCodexEntries(baseCodex, folded.newCodex), portraitSignal, folded.newCodex);
+                paintingCodex = getSnapshot().codex || paintingCodex;
+                const newcomers = diffNewCodexEntries(baseCodex, paintingCodex);
+                const portraitSignal = startAssetSignal(assetAbortMap, `portraits:${folded.newTurnIndex}`);
+                try {
+                    await generateMissingPortraits(io, newcomers, portraitSignal, paintingCodex);
+                } catch (e) {
+                    if (isAbortError(e)) return;
+                } finally {
+                    completeAssetJob(assetAbortMap, `portraits:${folded.newTurnIndex}`);
+                }
+                if (signal.aborted || portraitSignal.aborted) return;
+
+                const snapNow = getSnapshot();
+                const imageSignal = startAssetSignal(assetAbortMap, `scene:${folded.newTurnIndex}`);
+                handedToScene = true;
+                await attachSceneImage({
+                    io,
+                    imageDeps,
+                    prompt: turnData.image_prompt,
+                    codex: snapNow.codex || paintingCodex,
+                    scene: folded.newScene,
+                    narrative: folded.newTurn.narrative,
+                    slotId: snapNow.currentSlotId || ACTIVE_SAVE_ID,
+                    keepLastN: snapNow.prefs?.keepLastNImages || 0,
+                    turnIndex: folded.newTurnIndex,
+                    setHistory,
+                    signal: imageSignal,
+                    showToast,
+                    setGeneratingAssets,
+                    assetAbortMap,
+                });
+            } finally {
+                if (!handedToScene) setGeneratingAssets((prev) => ({ ...prev, image: false }));
+            }
+        };
+        paintPage().catch((e) => {
+            if (isAbortError(e)) return;
+            setGeneratingAssets((prev) => ({ ...prev, image: false }));
+        });
 
         if (isEnding && promptType !== 'initial') {
             const nextTurns = turnsRemaining - 1;

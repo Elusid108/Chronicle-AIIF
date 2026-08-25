@@ -1,7 +1,7 @@
 # Chronicle: Iterative Fiction Engine
 > A serverless, AI-driven interactive fiction engine that generates cohesive narratives, dynamic scene illustrations, and fully voiced dialogue in real time.
 
-**v3.2.0** — first-page image fix, Current Scene sanitizer, same-turn lore backfill, and read-only Codex portraits used as image references.
+**v3.2.1** — new Codex portraits generate before that page’s scene image so first appearances stay visually consistent. Text turns also read every non-thought Gemini part (and drop unsupported schema limits), so thinking models no longer fail every chain and leave page 1 on Waiting….
 
 ## Overview
 Chronicle is a browser-based interactive storytelling app that generates branching choose-your-own-adventure experiences. It runs entirely client-side against the Google Gemini and Imagen APIs (with a Pollinations fallback for images and the browser's speech synthesis as an audio fallback). There is no build step: GitHub Pages serves the files as-is.
@@ -12,9 +12,9 @@ As the story unfolds, the engine maintains a persistent memory: a running log of
 * **Persistent memory engine** — per-turn beats, automatic compaction of older beats into a long-term summary (with a rewind-safe `foldedThrough` watermark), the most recent prose (or a style card) for voice continuity, a current-scene object that is always injected, and relevance-filtered + player-pinned codex entries.
 * **Structured output** — narrative turns are generated with a Gemini `responseSchema`, guaranteeing narrative, scene, codex updates, summary, and image prompt every turn. Choice buttons are only requested in choice mode.
 * **Choice or text input** — **Choice** shows a 2×2 action grid and no text field. **Text** shows only the type-in box: leftover buttons from an earlier page are hidden immediately, and the next turn does not generate actions.
-* **Streaming narrative** — text is revealed as it is written (toggle in Settings), with a non-streaming fallback. Runaway scene fields are cut short; a streamed narrative is salvaged instead of failover-regenerating a different page.
+* **Streaming narrative** — text is revealed as it is written (toggle in Settings), with a non-streaming fallback if the stream is empty. Thought parts are skipped; JSON is taken from later parts. Runaway scene fields are cut short; a streamed narrative is salvaged instead of failover-regenerating a different page. A failed opening offers Retry.
 * **Gameplay controls** — rewind a turn, regenerate the latest turn, or edit your last action and regenerate from there. Narrative turns abort in-flight text so they cannot race; page images keep generating if you continue.
-* **Codex** — pin or merge entries; discoveries land on the same turn, each with a reference portrait shown in the popup and reused for later scene images. Fields are read-only.
+* **Codex** — pin or merge entries; discoveries land on the same turn. Each new entry gets a reference portrait before that page’s scene image is painted, and those portraits are attached as Gemini image references. Fields are read-only.
 * **Optional stat HUD** — let the Game Master track stats (health, resources, etc.) shown as a HUD; off by default.
 * **Multi-modal generation** — real-time generated imagery and text-to-speech narration accompany the text. Images are compressed on a web worker and stored in IndexedDB (not `localStorage`).
 * **Auto-Play** — when off, Chronicle does **not** call the TTS API after a turn (saves tokens and time). The speaker button still narrates on demand.
@@ -64,7 +64,7 @@ Each turn sends the player's action plus a system prompt assembled from:
 5. The recent running-log beats.
 6. The most relevant codex entries (mentioned recently, recently cited, player-pinned, protagonist, current location).
 
-The model returns structured JSON (narrative and image prompt first, then lore, then scene). The new beat is appended, scene is replaced (and sanitized), and codex updates are merged the same turn, with a follow-up lore scan for anything the GM omitted. Scene images attach stored Codex portraits as visual references. Rewind/regenerate abort in-flight text and rebuild derived state by replaying remaining turns, keeping `longTerm` unless the player rewound into the folded prefix.
+The model returns structured JSON (narrative and image prompt first, then lore, then scene). The new beat is appended, scene is replaced (and sanitized), and codex updates are merged the same turn, with a follow-up lore scan for anything the GM omitted. New Codex portraits are generated next; only then is the page image painted, with those portraits attached as visual references. Rewind/regenerate abort in-flight text and rebuild derived state by replaying remaining turns, keeping `longTerm` unless the player rewound into the folded prefix.
 
 The API key is sent as the `x-goog-api-key` header (not in the query string). 429s use exponential backoff; 401/403 do not cycle models.
 
