@@ -36,7 +36,7 @@ export function GameView({ app }) {
         initiateEnding, resumeStory, exportBook, exportStory, rewindTurn, regenerateTurn,
         beginEditAction, cancelEditAction, submitEditAction, setEditingActionText,
         setShowExportModal, setShowExitConfirm, setShowEndConfirm, confirmEndingSequence,
-        retryTurnImage,
+        retryTurnImage, retryOpening,
     } = app;
 
     const [moreOpen, setMoreOpen] = useState(false);
@@ -171,6 +171,15 @@ export function GameView({ app }) {
                                 <h2 className="text-3xl font-display font-bold text-white mb-2 tracking-widest">${currentTurnData.title}</h2>
                                 <p className="text-gray-500 font-serif italic">The journey continues...</p>
                             </div>
+                        </div>
+                    ` : (history.length === 0 && !loading) ? html`
+                        <div className="flex-1 flex flex-col items-center justify-center bg-black p-8 gap-3">
+                            <p className="text-gray-500 text-sm">The opening page did not arrive.</p>
+                            ${retryOpening && html`
+                                <button onClick=${retryOpening} className="px-3 py-1.5 text-[10px] uppercase tracking-widest font-bold bg-black/50 border border-blue-500/40 text-blue-200 rounded hover:bg-black/70 flex items-center gap-2">
+                                    <${RefreshCw} size=${12} /> Retry opening
+                                </button>
+                            `}
                         </div>
                     ` : null}
                 </div>

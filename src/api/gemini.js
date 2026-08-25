@@ -99,9 +99,45 @@ const fetchGemini = async (url, init, { retries = 3 } = {}) => {
     throw lastErr || new Error('Request failed');
 };
 
-const throwIfBad = (response) => {
+const throwIfBad = async (response) => {
     if (response.ok) return;
-    throw new GeminiHttpError(response.status, `Status ${response.status}`);
+    let detail = `Status ${response.status}`;
+    try {
+        const body = await response.json();
+        const msg = body?.error?.message || body?.error?.status;
+        if (msg) detail = `${detail}: ${String(msg).slice(0, 280)}`;
+    } catch { /* ignore */ }
+    throw new GeminiHttpError(response.status, detail);
+};
+
+const SCHEMA_STRIP_KEYS = new Set(['maxLength', 'minLength', 'minimum', 'maximum', 'pattern']);
+
+export const sanitizeApiSchema = (node) => {
+    if (Array.isArray(node)) return node.map(sanitizeApiSchema);
+    if (!node || typeof node !== 'object') return node;
+    const out = {};
+    for (const [key, value] of Object.entries(node)) {
+        if (SCHEMA_STRIP_KEYS.has(key)) continue;
+        out[key] = sanitizeApiSchema(value);
+    }
+    return out;
+};
+
+export const extractCandidateText = (payload) => {
+    if (!payload) return '';
+    const chunks = [];
+    const takePart = (part) => {
+        if (!part || typeof part !== 'object') return;
+        if (part.thought === true) return;
+        if (typeof part.text === 'string' && part.text) chunks.push(part.text);
+    };
+    const takeCandidate = (candidate) => {
+        const parts = candidate?.content?.parts;
+        if (Array.isArray(parts)) parts.forEach(takePart);
+    };
+    if (Array.isArray(payload.candidates)) payload.candidates.forEach(takeCandidate);
+    else takeCandidate(payload);
+    return chunks.join('');
 };
 
 // Tolerantly pull a string field's value out of a (possibly incomplete) JSON
@@ -187,7 +223,7 @@ const repairTruncatedJson = (s) => {
 
 const buildTextPayload = (prompt, systemInstruction, schema) => {
     const generationConfig = { temperature: 0.85, maxOutputTokens: 8192, responseMimeType: 'application/json' };
-    if (schema) generationConfig.responseSchema = schema;
+    if (schema) generationConfig.responseSchema = sanitizeApiSchema(schema);
     return {
         contents: [{ parts: [{ text: prompt }] }],
         systemInstruction: { parts: [{ text: systemInstruction }] },
@@ -203,7 +239,7 @@ const streamGenerate = async (apiKey, model, payload, { onPartialText, onPartial
         body: JSON.stringify(payload),
         signal,
     });
-    throwIfBad(response);
+    await throwIfBad(response);
     if (!response.body) throw new Error('No response body');
 
     const reader = response.body.getReader();
@@ -221,7 +257,7 @@ const streamGenerate = async (apiKey, model, payload, { onPartialText, onPartial
             if (!jsonStr || jsonStr === '[DONE]') continue;
             try {
                 const obj = JSON.parse(jsonStr);
-                const part = obj.candidates?.[0]?.content?.parts?.[0]?.text;
+                const part = extractCandidateText(obj);
                 if (part) {
                     fullText += part;
                     if (onPartialText) {
@@ -275,40 +311,52 @@ const salvageTurnData = (fullText, parsed) => {
  * deps: { apiKey, modelPrefs, setStatus }
  * opts: { schema, stream, onPartialText, onPartialBuffer, signal }
  */
+const generateContentOnce = async (apiKey, model, payload, signal) => {
+    const url = `${API_BASE}/models/${model}:generateContent`;
+    const response = await fetchGemini(url, {
+        method: 'POST',
+        headers: authHeaders(apiKey),
+        body: JSON.stringify(payload),
+        signal,
+    });
+    await throwIfBad(response);
+    const result = await response.json();
+    const text = extractCandidateText(result);
+    if (!text) throw new Error('Empty model response');
+    return text;
+};
+
 export const callGemini = async (deps, prompt, systemInstruction = '', opts = {}) => {
     const { apiKey, modelPrefs, setStatus, availableTextModels } = deps;
     const { schema, stream, onPartialText, onPartialBuffer, signal } = opts;
     const requiresNarrative = !schema || Boolean(schema.properties?.narrative);
     const attempts = [];
     let data = null;
+    let activeSchema = schema || null;
+    let schemaDropped = false;
 
     const modelsToTry = collectTextModels(modelPrefs, availableTextModels);
 
-    for (const model of modelsToTry) {
+    for (let mi = 0; mi < modelsToTry.length; mi++) {
+        const model = modelsToTry[mi];
         const start = performance.now();
         let fullText = '';
         try {
             setStatus && setStatus(requiresNarrative ? `Narrative: ${model}...` : `Lore: ${model}...`);
-            const payload = buildTextPayload(prompt, systemInstruction, schema);
+            const payload = buildTextPayload(prompt, systemInstruction, activeSchema);
 
             if (stream) {
                 fullText = await streamGenerate(apiKey, model, payload, { onPartialText, onPartialBuffer, signal });
+                if (!String(fullText || '').trim()) {
+                    fullText = await generateContentOnce(apiKey, model, payload, signal);
+                }
                 let parsed = null;
                 try { parsed = parseModelJson(fullText); } catch { parsed = null; }
                 data = requiresNarrative
                     ? ((parsed && parsed.narrative) ? parsed : salvageTurnData(fullText, parsed))
                     : parsed;
             } else {
-                const url = `${API_BASE}/models/${model}:generateContent`;
-                const response = await fetchGemini(url, {
-                    method: 'POST',
-                    headers: authHeaders(apiKey),
-                    body: JSON.stringify(payload),
-                    signal,
-                });
-                throwIfBad(response);
-                const result = await response.json();
-                fullText = result.candidates[0].content.parts[0].text;
+                fullText = await generateContentOnce(apiKey, model, payload, signal);
                 data = parseModelJson(fullText);
             }
             if (requiresNarrative ? !data?.narrative : !data) throw new Error('Invalid model JSON');
@@ -327,6 +375,13 @@ export const callGemini = async (deps, prompt, systemInstruction = '', opts = {}
                     break;
                 }
             }
+            if (e instanceof GeminiHttpError && e.status === 400 && activeSchema && !schemaDropped) {
+                schemaDropped = true;
+                activeSchema = null;
+                mi -= 1;
+                console.warn(`Model ${model} rejected the schema. Retrying without responseSchema...`, e.message);
+                continue;
+            }
             data = null;
             attempts.push({ model, status: 'failed', duration: (performance.now() - start) / 1000, error: e.message });
             const canFailover = !(e instanceof GeminiHttpError && (e.status === 401 || e.status === 403));
@@ -336,7 +391,10 @@ export const callGemini = async (deps, prompt, systemInstruction = '', opts = {}
         }
     }
 
-    if (!data) throw new Error('All text models failed');
+    if (!data) {
+        const last = [...attempts].reverse().find((row) => row.error);
+        throw new Error(last?.error ? `All text models failed (${last.error})` : 'All text models failed');
+    }
     return { data, stats: attempts };
 };
 
@@ -359,9 +417,9 @@ export const callGeminiText = async (deps, prompt, systemInstruction = '', opts 
                 body: JSON.stringify(payload),
                 signal,
             });
-            throwIfBad(response);
+            await throwIfBad(response);
             const result = await response.json();
-            const text = result.candidates?.[0]?.content?.parts?.[0]?.text;
+            const text = extractCandidateText(result);
             if (text) return text.trim();
         } catch (e) {
             if (isAbortError(e)) throw e;
@@ -439,7 +497,7 @@ export const generateImage = async (deps, imagePrompt, opts = {}) => {
                     setMediaStatus && setMediaStatus((prev) => ({ ...prev, images: 'backup' }));
                     throw new GeminiHttpError(response.status, 'Quota/Permission Limit');
                 }
-                throwIfBad(response);
+                await throwIfBad(response);
                 const data = await response.json();
                 if (data.predictions?.[0]?.bytesBase64Encoded) {
                     attempts.push({ model: modelId, status: 'success', duration: (performance.now() - start) / 1000 });
@@ -462,7 +520,7 @@ export const generateImage = async (deps, imagePrompt, opts = {}) => {
                 setMediaStatus && setMediaStatus((prev) => ({ ...prev, images: 'backup' }));
                 throw new GeminiHttpError(response.status, 'Quota/Permission Limit');
             }
-            throwIfBad(response);
+            await throwIfBad(response);
             const data = await response.json();
             const part = data.candidates?.[0]?.content?.parts?.find((p) => p.inlineData);
             if (part) {
@@ -557,7 +615,7 @@ export const fetchAvailableModels = async (apiKey) => {
         const res = await fetchGemini(`${API_BASE}/models?pageSize=1000${tokenParam}`, {
             headers: authHeaders(apiKey, false),
         });
-        throwIfBad(res);
+        await throwIfBad(res);
         const data = await res.json();
         if (data.models) allModels = allModels.concat(data.models);
         pageToken = data.nextPageToken || '';

@@ -405,8 +405,27 @@ export function App() {
         setCurrentSlideIndex(0);
         setIsEnding(false); setTurnsRemaining(null); setIsFinished(false);
         setExportDetails({ title: 'The Unnamed Chronicle', author: 'Anonymous' });
+        setView('game');
+        setIsStreaming(true);
+        setStreamingText('');
+        setLoading(false);
         runTurn('initial', buildInitialPrompt(config, initialContext), {
             history: [], codex: { ...DEFAULT_CODEX }, summary: { ...EMPTY_SUMMARY }, stats: {}, scene: { ...EMPTY_SCENE },
+        });
+    };
+
+    const retryOpening = () => {
+        if (history.length > 0) return;
+        setIsStreaming(true);
+        setStreamingText('');
+        setLoading(false);
+        setToast(null);
+        runTurn('initial', buildInitialPrompt(config, initialContext), {
+            history: [],
+            codex: snapshotRef.current.codex || { ...DEFAULT_CODEX },
+            summary: snapshotRef.current.summary || { ...EMPTY_SUMMARY },
+            stats: {},
+            scene: snapshotRef.current.scene || { ...EMPTY_SCENE },
         });
     };
 
@@ -513,6 +532,11 @@ export function App() {
     };
 
     const goHome = async () => {
+        abortActiveTurn(abortRef);
+        abortAllAssetSignals(assetAbortMap);
+        setIsStreaming(false);
+        setStreamingText('');
+        setLoading(false);
         stopAudio();
         setView('setup');
         setActivePanel(null);
@@ -560,7 +584,11 @@ export function App() {
     };
 
     const hydrate = async (s, imageSaveId = ACTIVE_SAVE_ID) => {
+        abortActiveTurn(abortRef);
         abortAllAssetSignals(assetAbortMap);
+        setIsStreaming(false);
+        setStreamingText('');
+        setLoading(false);
         revokeHistoryImages(history);
         revokeCodexPortraits(codex);
         const withImages = await attachStoredImages(s, imageSaveId);
@@ -705,7 +733,7 @@ export function App() {
         saveCodexEdits, toggleCodexPin, mergeSelectedInto,
         isStreaming, streamingText, editingAction, setEditingActionText, beginEditAction, cancelEditAction, submitEditAction,
         rewindTurn, regenerateTurn, goHome, toast, dismissToast, contextChars,
-        retryTurnImage, ensureCodexPortrait,
+        retryTurnImage, retryOpening, ensureCodexPortrait,
         textScrollRef, onTouchStart, onTouchMove, onTouchEnd, prevSlide, nextSlide,
     };
 

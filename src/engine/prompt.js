@@ -28,11 +28,11 @@ export const TURN_SCHEMA = {
         scene: {
             type: 'object',
             properties: {
-                location: { type: 'string', maxLength: 160 },
-                time_of_day: { type: 'string', maxLength: 80 },
-                present_characters: { type: 'array', items: { type: 'string', maxLength: 60 }, maxItems: 12 },
-                goal: { type: 'string', maxLength: 200 },
-                open_threads: { type: 'array', items: { type: 'string', maxLength: 120 }, maxItems: 6 },
+                location: { type: 'string' },
+                time_of_day: { type: 'string' },
+                present_characters: { type: 'array', items: { type: 'string' }, maxItems: 12 },
+                goal: { type: 'string' },
+                open_threads: { type: 'array', items: { type: 'string' }, maxItems: 6 },
             },
         },
         state_updates: {
