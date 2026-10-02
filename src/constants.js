@@ -11,6 +11,22 @@ export const SCENE_FIELD_LIMITS = {
 export const CODEX_DESC_LIMIT = 800;
 export const CODEX_VISUAL_LIMIT = 180;
 
+// Item possession. Only an explicit update (model or player) changes it.
+//  carried: on the player right now
+//  nearby:  in the current location and reachable (holder = NPC holding it)
+//  stored:  the player's, stashed somewhere else (location says where)
+//  lost:    consumed, destroyed, given away, or taken (holder may say who)
+//  unknown: never established
+export const POSSESSION_VALUES = ['carried', 'nearby', 'stored', 'lost', 'unknown'];
+export const POSSESSION_LABELS = {
+    carried: 'Carried by you',
+    nearby: 'Nearby',
+    stored: 'Stored elsewhere',
+    lost: 'Lost / used up',
+    unknown: 'Unknown',
+    '': 'Unknown',
+};
+
 export const IMAGE_NO_FRAME_CLAUSE = 'Fill the entire canvas edge to edge. Do not depict a physical picture frame, ornate gold frame, stacked frames, mat, gallery wall, or a painting hanging on a wall.';
 
 export const GENRE_PROMPTS = {

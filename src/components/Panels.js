@@ -1,7 +1,67 @@
 import { html } from '../html.js';
-import { BookOpen, FileText, X, Clock, Image as ImageIcon, Activity, Server, Mic, CheckCircle, CornerDownRight, Book, User as UserIcon, MapPin, Box, RefreshCw, Pin, PinOff } from 'lucide-react';
+import { BookOpen, FileText, X, Clock, Image as ImageIcon, Activity, Server, Mic, CheckCircle, CornerDownRight, Book, User as UserIcon, MapPin, Box, RefreshCw, Pin, PinOff, Package, Users, Compass, ListChecks } from 'lucide-react';
 import { summaryToText } from '../utils/storage.js';
+import { POSSESSION_LABELS, POSSESSION_VALUES } from '../constants.js';
+import { carriedItems, findBucketKey, nearbyItems } from '../engine/memory.js';
 import { Button } from './ui.js';
+
+const CHIP_TONES = {
+    characters: 'bg-blue-900/30 border-blue-800/60 text-blue-200 hover:border-blue-500',
+    items: 'bg-amber-900/30 border-amber-800/60 text-amber-100 hover:border-amber-500',
+    plain: 'bg-gray-800/60 border-gray-700 text-gray-300',
+};
+
+function SceneChip({ label, sub, tone = 'plain', onClick }) {
+    const cls = `text-[10px] px-2 py-0.5 rounded-full border transition-colors ${CHIP_TONES[tone] || CHIP_TONES.plain} ${onClick ? 'cursor-pointer' : 'cursor-default'}`;
+    return html`
+        <button type="button" onClick=${onClick} className=${cls} title=${sub || label}>
+            <span className="truncate max-w-[9rem] inline-block align-middle">${label}</span>
+            ${sub && html`<span className="text-gray-500 ml-1">· ${sub}</span>`}
+        </button>
+    `;
+}
+
+// Live "where you are / who is here / what you carry" card derived from scene + codex.
+export function SceneCard({ scene, codex, history, setSelectedCodexEntry }) {
+    if (!history || !history.length) return null;
+    const s = scene || {};
+    const present = s.present_characters || [];
+    const carried = carriedItems(codex);
+    const nearby = nearbyItems(codex, s);
+    const threads = s.open_threads || [];
+    const openEntry = (cat, name) => {
+        const key = findBucketKey(codex?.[cat] || {}, name);
+        if (key && setSelectedCodexEntry) setSelectedCodexEntry({ title: key, data: codex[cat][key], category: cat });
+    };
+    const row = (icon, label, body) => html`
+        <div className="flex gap-2 items-start">
+            <div className="text-[9px] uppercase tracking-widest text-gray-500 w-16 shrink-0 pt-0.5 flex items-center gap-1">${icon} ${label}</div>
+            <div className="flex flex-wrap gap-1 min-w-0">${body}</div>
+        </div>
+    `;
+    const none = (text) => html`<span className="text-[10px] text-gray-600 italic">${text}</span>`;
+    return html`
+        <div className="bg-blue-900/10 rounded border border-blue-900/30 p-3 space-y-2">
+            <div>
+                <h4 className="text-[10px] font-bold text-blue-400 uppercase tracking-widest mb-0.5 flex items-center gap-1"><${Compass} size=${10} /> Current scene</h4>
+                <div className="text-[11px] text-gray-300">${s.location || 'Unknown location'}${s.time_of_day ? html`<span className="text-gray-500"> · ${s.time_of_day}</span>` : ''}</div>
+                ${s.goal && html`<div className="text-[10px] text-gray-500 mt-0.5">${s.goal}</div>`}
+            </div>
+            ${row(html`<${Users} size=${9} />`, 'Here', present.length
+                ? present.map((name) => html`<${SceneChip} key=${name} label=${name} tone="characters" onClick=${() => openEntry('characters', name)} />`)
+                : none('You are alone.'))}
+            ${row(html`<${Package} size=${9} />`, 'Carrying', carried.length
+                ? carried.map(({ key, data }) => html`<${SceneChip} key=${key} label=${key} sub=${data.status || ''} tone="items" onClick=${() => openEntry('items', key)} />`)
+                : none('Nothing tracked yet.'))}
+            ${row(html`<${Box} size=${9} />`, 'Nearby', nearby.length
+                ? nearby.map(({ key, data }) => html`<${SceneChip} key=${key} label=${key} sub=${data.holder ? `held by ${data.holder}` : (data.location || '')} tone="items" onClick=${() => openEntry('items', key)} />`)
+                : none('Nothing notable.'))}
+            ${threads.length > 0 && row(html`<${ListChecks} size=${9} />`, 'Threads', html`
+                <ul className="text-[10px] text-gray-400 list-disc pl-3 space-y-0.5">${threads.map((t, i) => html`<li key=${i}>${t}</li>`)}</ul>
+            `)}
+        </div>
+    `;
+}
 
 const CODEX_GROUPS = [
     { title: 'People', bg: 'bg-blue-900/30', text: 'text-blue-400', key: 'characters' },
@@ -51,13 +111,7 @@ export function SidePanel({ app }) {
             <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
                 ${activePanel === 'codex' ? html`
                     <div className="space-y-6">
-                        ${scene && (scene.location || scene.goal) && html`
-                            <div className="bg-blue-900/10 rounded border border-blue-900/30 p-3">
-                                <h4 className="text-[10px] font-bold text-blue-400 uppercase tracking-widest mb-1">Current scene</h4>
-                                <div className="text-[10px] text-gray-400">${scene.location || 'Unknown location'}${scene.time_of_day ? ` · ${scene.time_of_day}` : ''}</div>
-                                ${scene.goal && html`<div className="text-[10px] text-gray-500 mt-1">${scene.goal}</div>`}
-                            </div>
-                        `}
+                        <${SceneCard} scene=${scene} codex=${codex} history=${history} setSelectedCodexEntry=${setSelectedCodexEntry} />
                         ${CODEX_GROUPS.map((group) => {
                             const entries = codex[group.key] || {};
                             const list = Object.entries(entries);
@@ -74,6 +128,7 @@ export function SidePanel({ app }) {
                                                         <span className="truncate">${name}</span>
                                                     </span>
                                                     <span className="flex items-center gap-1 shrink-0">
+                                                        ${group.key === 'items' && data && data.possession === 'carried' && html`<${Package} size=${9} className="text-amber-400" title="Carried by you" />`}
                                                         ${data && data.pinned && html`<${Pin} size=${9} className="text-blue-400" title="Pinned: always in the GM's context" />`}
                                                         ${data && data.source === 'player' && html`<span className="text-[8px] text-amber-400 uppercase">you</span>`}
                                                         <${CornerDownRight} size=${10} className="opacity-0 group-hover:opacity-100 text-blue-500" />
@@ -189,6 +244,21 @@ export function CodexEntryModal({ app }) {
                         ${field('Location', entry.location)}
                     </div>
                     ${(entry.aliases || []).length > 0 && field('Aliases', (entry.aliases || []).join(', '))}
+                    ${category === 'items' && html`
+                        <div className="bg-black/40 border border-amber-900/40 rounded p-2 space-y-2">
+                            <label className="text-[10px] uppercase text-amber-400 font-bold block flex items-center gap-1"><${Package} size=${10} /> Possession</label>
+                            <select value=${entry.possession || 'unknown'} onChange=${(e) => saveCodexEdits(category, title, { possession: e.target.value, holder: (e.target.value === 'nearby' || e.target.value === 'lost') ? (entry.holder || '') : '' })} className="w-full bg-black border border-gray-700 rounded p-2 text-xs text-gray-300">
+                                ${POSSESSION_VALUES.map((v) => html`<option key=${v} value=${v}>${POSSESSION_LABELS[v]}</option>`)}
+                            </select>
+                            ${(entry.possession === 'nearby' || entry.possession === 'lost') && html`
+                                <input key=${`${title}-holder`} type="text" defaultValue=${entry.holder || ''} placeholder="Who has it? (optional)"
+                                    onBlur=${(e) => { if (e.target.value !== (entry.holder || '')) saveCodexEdits(category, title, { holder: e.target.value }); }}
+                                    onKeyDown=${(e) => { if (e.key === 'Enter') e.target.blur(); }}
+                                    className="w-full bg-black border border-gray-700 rounded p-2 text-xs text-gray-300" />
+                            `}
+                            <div className="text-[9px] text-gray-600">Corrections are kept through rewind and regenerate.</div>
+                        </div>
+                    `}
                     <div className="flex gap-2">
                         <${Button} variant="secondary" onClick=${() => regenerateCodexPortrait(category, title)} className="flex-1 text-xs">
                             <${RefreshCw} size=${12} /> Regenerate portrait

@@ -2,11 +2,12 @@ import { useState } from 'react';
 import { html } from '../html.js';
 import {
     Home, Flag, RefreshCw, Printer, Settings, BookOpen, FileText, ChevronLeft, ChevronRight,
-    Palette, Sparkles, Volume2, VolumeX, Bookmark, CornerDownRight, Send, Undo2, Pencil, X, Book, Download, AlertTriangle, Heart, MoreVertical,
+    Palette, Sparkles, Volume2, VolumeX, Bookmark, CornerDownRight, Send, Undo2, Pencil, X, Book, Download, AlertTriangle, Heart, MoreVertical, Package,
 } from 'lucide-react';
 import { Button, Input, ImageLightbox, Toast } from './ui.js';
 import { SettingsPanel } from './SettingsPanel.js';
 import { SidePanel, CodexEntryModal } from './Panels.js';
+import { carriedItems } from '../engine/memory.js';
 
 function StatHud({ stats }) {
     const keys = Object.keys(stats || {});
@@ -26,7 +27,7 @@ function StatHud({ stats }) {
 
 export function GameView({ app }) {
     const {
-        config, prefs, history, currentSlideIndex, currentTurnData, isLatestSlide,
+        config, prefs, history, codex, currentSlideIndex, currentTurnData, isLatestSlide,
         displayImage, isBlurring, generatingAssets, mediaStatus, isPlaying, loading, status,
         isEnding, isFinished, turnsRemaining, userInput, setUserInput, activePanel, stats,
         isStreaming, streamingText, editingAction, selectedCodexEntry,
@@ -57,6 +58,7 @@ export function GameView({ app }) {
         setMoreOpen(false);
         initiateEnding();
     };
+    const carriedCount = carriedItems(codex).length;
 
     return html`
         <div className="w-full flex flex-col md:flex-row bg-black text-gray-200 font-sans overflow-hidden" style=${{ height: 'var(--app-height, 100svh)' }} onTouchStart=${onTouchStart} onTouchMove=${onTouchMove} onTouchEnd=${onTouchEnd}>
@@ -83,6 +85,7 @@ export function GameView({ app }) {
                     </div>
                     <div className="flex gap-1 items-center">
                         ${isEnding && turnsRemaining != null && html`<div className="text-[10px] md:text-xs text-red-500 font-bold tracking-widest animate-pulse mr-1">END: ${turnsRemaining}</div>`}
+                        ${carriedCount > 0 && html`<button onClick=${() => togglePanel('codex')} className=${`flex items-center gap-1 px-1.5 py-1 rounded hover:bg-gray-800 text-[10px] font-bold tabular-nums ${activePanel === 'codex' ? 'text-amber-300' : 'text-amber-500/80'}`} title=${`Carrying ${carriedCount} item${carriedCount === 1 ? '' : 's'} — open the Codex`} aria-label="Inventory"><${Package} size=${14} /> ${carriedCount}</button>`}
                         ${isFinished && html`
                             <button onClick=${resumeStory} className="hidden md:flex text-xs bg-blue-900/30 text-blue-400 border border-blue-900/50 px-3 py-1 rounded hover:bg-blue-900/50 items-center gap-2"><${RefreshCw} size=${12} /> Resume</button>
                             <button onClick=${() => setShowExportModal(true)} className="hidden md:flex text-xs bg-emerald-900/30 text-emerald-400 border border-emerald-900/50 px-3 py-1 rounded hover:bg-emerald-900/50 items-center gap-2"><${Printer} size=${12} /> Book</button>

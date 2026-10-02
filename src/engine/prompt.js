@@ -1,6 +1,6 @@
-import { GENRE_PROMPTS, STYLE_PROMPTS, EMPTY_SCENE } from '../constants.js';
+import { GENRE_PROMPTS, STYLE_PROMPTS, EMPTY_SCENE, POSSESSION_VALUES } from '../constants.js';
 import { normalizeSummary } from '../utils/storage.js';
-import { selectRelevantCodex, recentNarratives } from './memory.js';
+import { carriedItems, nearbyItems, selectRelevantCodex, recentNarratives } from './memory.js';
 
 const CODEX_UPDATE_ITEM = {
     type: 'object',
@@ -12,9 +12,34 @@ const CODEX_UPDATE_ITEM = {
         aliases: { type: 'array', items: { type: 'string' }, maxItems: 6 },
         status: { type: 'string' },
         location: { type: 'string' },
+        possession: { type: 'string', enum: POSSESSION_VALUES },
+        holder: { type: 'string' },
     },
     required: ['category', 'key', 'entry'],
 };
+
+const INVENTORY_MAX_ENTRIES = 30;
+const INVENTORY_MAX_CHARS = 800;
+
+const describeInventoryItem = ({ key, data }) => {
+    const extras = [];
+    if (data.holder) extras.push(`held by ${data.holder}`);
+    if (data.location) extras.push(data.location);
+    return `${key}${data.status ? ` — ${data.status}` : ''}${extras.length ? ` (${extras.join('; ')})` : ''}`;
+};
+
+const formatInventoryList = (rows) => {
+    if (!rows.length) return '(nothing)';
+    let text = rows.slice(0, INVENTORY_MAX_ENTRIES).map(describeInventoryItem).join('\n');
+    if (text.length > INVENTORY_MAX_CHARS) text = `${text.slice(0, INVENTORY_MAX_CHARS).replace(/\n[^\n]*$/, '')}\n…`;
+    return text;
+};
+
+// Always-present inventory context, derived from item possession in the codex.
+export const inventorySections = (codex, scene = EMPTY_SCENE) => [
+    `INVENTORY (carried by the player right now; authoritative — the player still has every item listed here):\n${formatInventoryList(carriedItems(codex))}`,
+    `NEARBY (items in this location or held by someone present):\n${formatInventoryList(nearbyItems(codex, scene))}`,
+];
 
 // Structured-output schema. narrative is ordered first so it streams earliest.
 export const TURN_SCHEMA = {
@@ -131,6 +156,7 @@ export const buildSystemPrompt = ({
     }
 
     sections.push(`CURRENT SCENE (authoritative; keep this consistent unless the action changes it):\n${JSON.stringify(currentScene)}`);
+    sections.push(...inventorySections(codex, currentScene));
 
     if (norm.longTerm) sections.push(`STORY SO FAR (compressed history):\n${norm.longTerm}`);
     if (recallText) sections.push(`RECALLED EARLIER EVENTS (older pages retrieved because they may matter for this action; use only if relevant):\n${recallText}`);
@@ -158,8 +184,9 @@ export const buildSystemPrompt = ({
     const extra = [
         `6. SCENE: Fill scene with short literal values only: location (place name), time_of_day (e.g. "Midnight, rainy"), present_characters, a one-line goal, and up to 6 open_threads. present_characters must be the COMPLETE list of who is with the player right now (not the player); return [] if the player is alone. open_threads must be the complete current list; drop resolved threads. Never self-correct, never write "let's clean up", never dump clocks/metrics/indexes, never repeat a phrase.`,
         `7. CODEX FIELDS: For each update you may set visual (one-line appearance for the painter), aliases, status, and location. Use category "character", "place", or "item". Reuse the exact existing key for known entities. To clear a stale status or location, set it to "none".`,
+        `8. INVENTORY: Every item codex_update MUST set possession: "carried" (on the player), "nearby" (in this location; set holder if a character has it), "stored" (the player's, stashed elsewhere; say where in location), "lost" (used up, destroyed, given away, or taken), or "unknown". Emit an item codex_update whenever the player picks up, drops, uses up, gives, stores, or loses an item, or a character hands one over. Items in INVENTORY are on the player right now: never re-introduce them as new discoveries and never forget the player has them.`,
     ];
-    if (statsEnabled) extra.push(`8. STATE: When the player's tracked stats change (health, resources, etc.), reflect it in state_updates as key/value pairs.`);
+    if (statsEnabled) extra.push(`9. STATE: When the player's tracked stats change (health, resources, etc.), reflect it in state_updates as key/value pairs.`);
 
     sections.push(
 `TASK:

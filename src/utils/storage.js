@@ -1,6 +1,6 @@
 import {
     CODEX_DESC_LIMIT, CODEX_VISUAL_LIMIT, DEFAULT_CONFIG, DEFAULT_CODEX, EMPTY_SCENE, EMPTY_SUMMARY,
-    INITIAL_SUMMARY, SCENE_FIELD_LIMITS,
+    INITIAL_SUMMARY, POSSESSION_VALUES, SCENE_FIELD_LIMITS,
 } from '../constants.js';
 import {
     LEGACY_ACTIVE_ID, deleteCodexImagesForSave, deleteImagesForSave,
@@ -94,11 +94,18 @@ export const persistableEntry = (val) => {
         aliases: n.aliases,
         status: n.status,
         location: n.location,
+        possession: n.possession,
+        holder: n.holder,
         source: n.source,
         pinned: n.pinned,
         visual: n.visual,
         hasPortrait: n.hasPortrait,
     };
+};
+
+export const normalizePossession = (value) => {
+    const v = String(value || '').trim().toLowerCase();
+    return POSSESSION_VALUES.includes(v) ? v : '';
 };
 
 export const normalizeEntry = (val) => {
@@ -109,6 +116,8 @@ export const normalizeEntry = (val) => {
             aliases: [],
             status: '',
             location: '',
+            possession: '',
+            holder: '',
             source: 'model',
             pinned: false,
             visual: '',
@@ -123,6 +132,8 @@ export const normalizeEntry = (val) => {
         aliases: Array.isArray(data.aliases) ? data.aliases.map(String).filter(Boolean) : [],
         status: sanitizeSceneString(typeof data.status === 'string' ? data.status : '', 80),
         location: sanitizeSceneString(typeof data.location === 'string' ? data.location : '', 120),
+        possession: normalizePossession(data.possession),
+        holder: sanitizeSceneString(typeof data.holder === 'string' ? data.holder : '', 60),
         source: data.source === 'player' ? 'player' : 'model',
         pinned: Boolean(data.pinned),
         visual: sanitizeSceneString(typeof data.visual === 'string' ? data.visual : '', CODEX_VISUAL_LIMIT),

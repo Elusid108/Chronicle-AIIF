@@ -1,5 +1,7 @@
 import { CODEX_DESC_LIMIT, CODEX_VISUAL_LIMIT, EMPTY_SCENE } from '../constants.js';
-import { normalizeCodex, normalizeEntry, normalizeScene, normalizeSummary, sanitizeSceneString } from '../utils/storage.js';
+import {
+    normalizeCodex, normalizeEntry, normalizePossession, normalizeScene, normalizeSummary, sanitizeSceneString,
+} from '../utils/storage.js';
 
 export const normalizeKey = (key) => String(key || '').trim().replace(/\s+/g, ' ');
 
@@ -95,6 +97,9 @@ export const mergeCodex = (prev, updates, currentTurnIndex) => {
         const clearLocation = isClearSentinel(locationRaw);
         const status = clearStatus ? '' : statusRaw;
         const location = clearLocation ? '' : locationRaw;
+        const possession = normalizePossession(item.possession);
+        const holderRaw = typeof item.holder === 'string' ? item.holder.trim() : '';
+        const holder = isClearSentinel(holderRaw) ? '' : sanitizeSceneString(holderRaw, 60);
 
         if (existing) {
             const cites = existing.citations.includes(pageNum) ? existing.citations : [...existing.citations, pageNum];
@@ -120,6 +125,9 @@ export const mergeCodex = (prev, updates, currentTurnIndex) => {
                 status: clearStatus ? '' : (status || existing.status),
                 location: clearLocation ? '' : (location || existing.location),
                 visual: visual || existing.visual,
+                // An explicit possession replaces the old one and resets a stale holder.
+                possession: possession || existing.possession,
+                holder: possession ? holder : (holder || existing.holder),
             };
         } else {
             next[catKey][incomingKey] = {
@@ -128,6 +136,8 @@ export const mergeCodex = (prev, updates, currentTurnIndex) => {
                 aliases: aliases.filter((a) => a.toLowerCase() !== incomingKey.toLowerCase()),
                 status,
                 location,
+                possession,
+                holder,
                 source: 'model',
                 pinned: false,
                 visual,
@@ -188,10 +198,35 @@ const compactForm = (key, data) => {
         aliases: data.aliases,
         status: data.status,
         location: data.location,
+        possession: data.possession || undefined,
+        holder: data.holder || undefined,
         visual: data.visual,
         source: data.source,
         pinned: data.pinned || undefined,
     };
+};
+
+// Items on the player right now.
+export const carriedItems = (codex) => {
+    const src = normalizeCodex(codex);
+    return Object.entries(src.items || {})
+        .filter(([, data]) => data.possession === 'carried')
+        .map(([key, data]) => ({ key, data }));
+};
+
+// Items reachable in the current scene: marked nearby, or held by someone present.
+export const nearbyItems = (codex, scene = EMPTY_SCENE) => {
+    const src = normalizeCodex(codex);
+    const present = (scene?.present_characters || []).map((n) => String(n).toLowerCase());
+    const heldByPresent = (holder) => {
+        if (!holder) return false;
+        const h = holder.toLowerCase();
+        return present.some((p) => p === h || mentionedIn(p, holder) || mentionedIn(holder, p));
+    };
+    return Object.entries(src.items || {})
+        .filter(([, data]) => data.possession === 'nearby'
+            || (data.possession !== 'carried' && data.possession !== 'lost' && data.possession !== 'stored' && heldByPresent(data.holder)))
+        .map(([key, data]) => ({ key, data }));
 };
 
 export const selectRelevantCodex = (codex, recentText = '', scene = EMPTY_SCENE, maxEntries = 24) => {
@@ -209,7 +244,8 @@ export const selectRelevantCodex = (codex, recentText = '', scene = EMPTY_SCENE,
             const mentioned = names.some((n) => mentionedIn(recentText, n));
             const isProtagonist = cat === 'characters' && Object.keys(entries)[0] === key;
             const isCurrentPlace = cat === 'places' && sceneLoc && names.some((n) => mentionedIn(sceneLoc, n) || n.toLowerCase() === sceneLoc.toLowerCase());
-            const always = Boolean(data.source === 'player' || data.pinned || isProtagonist || isCurrentPlace);
+            const isCarried = cat === 'items' && data.possession === 'carried';
+            const always = Boolean(data.source === 'player' || data.pinned || isProtagonist || isCurrentPlace || isCarried);
             const score = (always ? 200000 : 0) + (mentioned ? 100000 : 0) + lastCite;
             all.push({ cat, key, data, score, always });
         }
@@ -299,6 +335,8 @@ export const updateCodexEntry = (codex, category, key, patch) => {
         description: patch.description != null ? String(patch.description) : current.description,
         status: patch.status != null ? String(patch.status) : current.status,
         location: patch.location != null ? String(patch.location) : current.location,
+        possession: patch.possession != null ? normalizePossession(patch.possession) : current.possession,
+        holder: patch.holder != null ? sanitizeSceneString(String(patch.holder), 60) : current.holder,
         aliases,
         pinned: patch.pinned != null ? Boolean(patch.pinned) : current.pinned,
         visual: patch.visual != null ? sanitizeSceneString(String(patch.visual), CODEX_VISUAL_LIMIT) : current.visual,
@@ -333,6 +371,8 @@ export const mergeCodexKeys = (codex, category, fromKey, intoKey) => {
         aliases,
         status: into.status || from.status,
         location: into.location || from.location,
+        possession: into.possession || from.possession,
+        holder: into.holder || from.holder,
         visual: into.visual || from.visual,
         hasPortrait: Boolean(into.hasPortrait || from.hasPortrait),
         portraitUrl: into.portraitUrl || from.portraitUrl,
