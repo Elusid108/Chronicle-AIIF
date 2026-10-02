@@ -3,11 +3,11 @@ import { html } from './html.js';
 import { DEFAULT_CONFIG, DEFAULT_CODEX, EMPTY_SCENE } from './constants.js';
 import {
     STORAGE_KEYS, loadJSON, saveJSON,
-    initStorage, readActiveSave, writeActiveSave, clearActiveSave, attachStoredImages,
+    initStorage, attachStoredImages,
     attachCodexPortraits, revokeCodexPortraits,
     listSlots, deleteSlot, loadSlot, exportStoryFile, importStoryFile,
     normalizeSummary, createStorySlot, writeStorySlot, renameSlot, reorderSlots,
-    setCurrentSlotId, ensureActiveMigratedToLibrary, buildSavePayload,
+    setCurrentSlotId, migrateLegacyActive, buildSavePayload,
 } from './utils/storage.js';
 import { fetchAvailableModels, generateSpeech } from './api/gemini.js';
 import { buildInitialPrompt, buildSystemPrompt } from './engine/prompt.js';
@@ -20,7 +20,7 @@ import {
     startAssetSignal,
 } from './engine/session.js';
 import { revokeHistoryImages, revokeIfBlobUrl } from './utils/images.js';
-import { ACTIVE_SAVE_ID, copyCodexImageKey, copyCodexImages, copyImages, deleteCodexImage, deleteTurnImagesFrom, getCodexImage } from './utils/idb.js';
+import { copyCodexImageKey, deleteCodexImage, deleteTurnImagesFrom, getCodexImage, pruneTurnImages } from './utils/idb.js';
 import { escapeHtml, safeImageSrc } from './utils/text.js';
 import { downloadVerboseLog, setVerboseEnabled } from './utils/verboseLog.js';
 import { ApiKeyModal } from './components/ApiKeyModal.js';
@@ -153,7 +153,7 @@ export function App() {
         bootReady.current = (async () => {
             try {
                 await initStorage();
-                const id = await ensureActiveMigratedToLibrary();
+                const id = await migrateLegacyActive();
                 setCurrentSlotIdState(id);
                 setSlots(await listSlots());
             } catch (e) {
@@ -163,6 +163,11 @@ export function App() {
     }, []);
 
     useEffect(() => { saveJSON(STORAGE_KEYS.prefs, prefs); }, [prefs]);
+    useEffect(() => {
+        // Lowering "Keep last N images" trims the current story's stored pages right away.
+        if (!currentSlotId) return;
+        pruneTurnImages(currentSlotId, prefs.keepLastNImages || 0).catch(() => {});
+    }, [prefs.keepLastNImages]);
     useEffect(() => { setVerboseEnabled(!!prefs.verboseLogging); }, [prefs.verboseLogging]);
     useEffect(() => { saveJSON(STORAGE_KEYS.modelPrefs, modelPrefs); }, [modelPrefs]);
     useEffect(() => { saveJSON(STORAGE_KEYS.favVoices, favorites); }, [favorites]);
@@ -185,7 +190,7 @@ export function App() {
                 await initStorage();
                 const payloadJson = JSON.stringify(buildSavePayload(job.state));
                 if (payloadJson === q.lastJson && job.slotId === q.lastSlotId) return;
-                await writeStorySlot(job.slotId, job.state, job.keepLastN);
+                await writeStorySlot(job.slotId, job.state);
                 q.lastJson = payloadJson;
                 q.lastSlotId = job.slotId;
                 setSlots(await listSlots());
@@ -206,7 +211,6 @@ export function App() {
         const q = saveQueue.current;
         q.pending = {
             slotId: currentSlotId,
-            keepLastN: prefs.keepLastNImages || 0,
             state: {
                 history, codex, codexOverrides, summary, scene, styleCard, currentSlideIndex, isEnding, turnsRemaining,
                 isFinished, exportDetails, config, initialContext, stats,
@@ -316,7 +320,7 @@ export function App() {
             codex: live.codex,
             scene: turn.scene || live.scene,
             narrative: turn.narrative,
-            slotId: live.currentSlotId || ACTIVE_SAVE_ID,
+            slotId: live.currentSlotId || null,
             keepLastN: live.prefs?.keepLastNImages || 0,
             turnIndex: idx,
             setHistory,
@@ -338,9 +342,9 @@ export function App() {
         const entry = snapshotRef.current.codex?.[category]?.[key];
         if (!entry) return;
         if (entry.portraitUrl) return;
-        const slotId = snapshotRef.current.currentSlotId || ACTIVE_SAVE_ID;
+        const slotId = snapshotRef.current.currentSlotId;
         try {
-            const blob = await getCodexImage(slotId, category, key) || await getCodexImage(ACTIVE_SAVE_ID, category, key);
+            const blob = slotId ? await getCodexImage(slotId, category, key) : null;
             if (blob) {
                 const current = snapshotRef.current.codex?.[category]?.[key];
                 if (!current) return;
@@ -513,10 +517,9 @@ export function App() {
             revokeHistoryImages(history);
             revokeCodexPortraits(codex);
             await initStorage();
-            await clearActiveSave();
             const storyConfig = { ...setupConfig };
             const fresh = { ...emptyStoryState(), config: storyConfig };
-            const entry = await createStorySlot(fresh, 0);
+            const entry = await createStorySlot(fresh);
             const resetSnap = {
                 ...snapshotRef.current,
                 ...fresh,
@@ -701,7 +704,6 @@ export function App() {
         revokeHistoryImages(history);
         revokeCodexPortraits(codex);
         await initStorage();
-        await clearActiveSave();
         setHistory([]); setCodex({ ...DEFAULT_CODEX }); setCodexOverrides(EMPTY_OVERRIDES); setCurrentSlideIndex(0);
         setSummary({ ...EMPTY_SUMMARY }); setScene({ ...EMPTY_SCENE }); setStyleCard(''); setStats({}); setUserInput('');
         setIsEnding(false); setTurnsRemaining(null); setIsFinished(false);
@@ -749,11 +751,10 @@ export function App() {
     const regenerateCodexPortrait = async (category, key) => {
         const entry = snapshotRef.current.codex?.[category]?.[key];
         if (!entry) return;
-        const slotId = snapshotRef.current.currentSlotId || ACTIVE_SAVE_ID;
+        const slotId = snapshotRef.current.currentSlotId;
         revokeIfBlobUrl(entry.portraitUrl);
         try {
-            await deleteCodexImage(slotId, category, key);
-            if (slotId !== ACTIVE_SAVE_ID) await deleteCodexImage(ACTIVE_SAVE_ID, category, key);
+            if (slotId) await deleteCodexImage(slotId, category, key);
         } catch { /* generate anyway */ }
         const nextEntry = { ...entry, hasPortrait: false, portraitUrl: '' };
         setCodex((prev) => {
@@ -783,12 +784,12 @@ export function App() {
         setCodex(next);
         setCodexOverrides(overrides);
         setSelectedCodexEntry(null);
-        const slotId = live.currentSlotId || ACTIVE_SAVE_ID;
-        copyCodexImageKey(slotId, sel.category, sel.title, intoKey).catch(() => {});
-        if (slotId !== ACTIVE_SAVE_ID) copyCodexImageKey(ACTIVE_SAVE_ID, sel.category, sel.title, intoKey).catch(() => {});
+        const slotId = live.currentSlotId;
+        if (slotId) copyCodexImageKey(slotId, sel.category, sel.title, intoKey).catch(() => {});
     };
 
-    const hydrate = async (s, imageSaveId = ACTIVE_SAVE_ID) => {
+    const hydrate = async (s, slotId) => {
+        if (!slotId) throw new Error('hydrate requires a story slot id');
         abortActiveTurn(abortRef);
         abortAllAssetSignals(assetAbortMap);
         await flushSave();
@@ -798,14 +799,10 @@ export function App() {
         resetStoryUi();
         revokeHistoryImages(snapshotRef.current.history);
         revokeCodexPortraits(snapshotRef.current.codex);
-        const withImages = await attachStoredImages(s, imageSaveId);
-        const withPortraits = await attachCodexPortraits(withImages.codex, imageSaveId);
-        if (imageSaveId && imageSaveId !== ACTIVE_SAVE_ID) {
-            await setCurrentSlotId(imageSaveId);
-            setCurrentSlotIdState(imageSaveId);
-            try { await copyImages(imageSaveId, ACTIVE_SAVE_ID, snapshotRef.current.prefs.keepLastNImages || 0); } catch { /* ignore */ }
-            try { await copyCodexImages(imageSaveId, ACTIVE_SAVE_ID); } catch { /* ignore */ }
-        }
+        const withImages = await attachStoredImages(s, slotId);
+        const withPortraits = await attachCodexPortraits(withImages.codex, slotId);
+        await setCurrentSlotId(slotId);
+        setCurrentSlotIdState(slotId);
         setHistory(withImages.history);
         setCodex(withPortraits);
         setCodexOverrides(withImages.codexOverrides || EMPTY_OVERRIDES);
@@ -819,9 +816,7 @@ export function App() {
         const loadedConfig = { ...DEFAULT_CONFIG, ...withImages.config };
         const loadedSummary = normalizeSummary(withImages.summary);
         const loadedScene = withImages.scene || { ...EMPTY_SCENE };
-        const loadedSlotId = imageSaveId && imageSaveId !== ACTIVE_SAVE_ID
-            ? imageSaveId
-            : snapshotRef.current.currentSlotId;
+        const loadedSlotId = slotId;
         snapshotRef.current = {
             ...snapshotRef.current,
             history: withImages.history,
@@ -854,9 +849,7 @@ export function App() {
             await loadSlotById(latest.id);
             return;
         }
-        const s = await readActiveSave();
-        if (!s) { showToast('error', 'No saved story found'); return; }
-        await hydrate(s, ACTIVE_SAVE_ID);
+        showToast('error', 'No saved story found');
     };
 
     const refreshSlots = async () => setSlots(await listSlots());
@@ -877,11 +870,15 @@ export function App() {
         }
     };
     const deleteSlotById = async (id) => {
-        const next = await deleteSlot(id);
         if (currentSlotId === id) {
+            // Drop any queued autosave for the story being deleted so it cannot be resurrected.
+            const q = saveQueue.current;
+            clearTimeout(q.timer); q.timer = null; q.pending = null;
+            await q.chain;
             setCurrentSlotIdState(null);
-            await clearActiveSave();
+            snapshotRef.current = { ...snapshotRef.current, currentSlotId: null };
         }
+        const next = await deleteSlot(id);
         setSlots(next);
     };
     const renameSlotById = async (id, name) => {
@@ -900,7 +897,8 @@ export function App() {
     const importStory = async (file) => {
         try {
             const s = await importStoryFile(file);
-            const entry = await createStorySlot(s, 0);
+            await flushSave();
+            const entry = await createStorySlot(s);
             await hydrate(s, entry.id);
             setSlots(await listSlots());
             showToast('info', 'Story imported');

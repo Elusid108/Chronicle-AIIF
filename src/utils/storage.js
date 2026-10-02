@@ -3,8 +3,8 @@ import {
     INITIAL_SUMMARY, SCENE_FIELD_LIMITS,
 } from '../constants.js';
 import {
-    ACTIVE_SAVE_ID, copyCodexImages, copyImages, deleteCodexImagesForSave, deleteImagesForSave,
-    getCodexImage, getTurnImage, idbDelete, idbGet, idbPut,
+    LEGACY_ACTIVE_ID, deleteCodexImagesForSave, deleteImagesForSave,
+    getCodexImage, getTurnImage, idbDelete, idbGet, idbPut, renameKeyPrefix,
 } from './idb.js';
 import { revokeIfBlobUrl } from './images.js';
 
@@ -282,11 +282,12 @@ let initLock = null;
 const runInitStorage = async () => {
     if (localStorage.getItem(STORAGE_KEYS.idbMigrated) === '1') return;
     try {
-        const existingActive = await idbGet('saves', ACTIVE_SAVE_ID);
+        // v2 localStorage save -> the legacy 'active' record; migrateLegacyActive turns it into a slot.
+        const existingActive = await idbGet('saves', LEGACY_ACTIVE_ID);
         if (!existingActive) {
             const legacySave = loadJSON(STORAGE_KEYS.save, null);
             const migrated = migrateSave(legacySave);
-            if (migrated) await idbPut('saves', buildSavePayload(migrated), ACTIVE_SAVE_ID);
+            if (migrated) await idbPut('saves', buildSavePayload(migrated), LEGACY_ACTIVE_ID);
         }
 
         const legacySlots = loadJSON(STORAGE_KEYS.slots, []);
@@ -322,9 +323,9 @@ export const initStorage = () => {
     return initLock;
 };
 
-export const readActiveSave = async () => {
+const readLegacyActive = async () => {
     try {
-        const data = await idbGet('saves', ACTIVE_SAVE_ID);
+        const data = await idbGet('saves', LEGACY_ACTIVE_ID);
         const migrated = migrateSave(data);
         if (migrated) return migrated;
     } catch (e) {
@@ -333,24 +334,14 @@ export const readActiveSave = async () => {
     return migrateSave(loadJSON(STORAGE_KEYS.save, null));
 };
 
-export const writeActiveSave = async (state) => {
-    try {
-        await idbPut('saves', buildSavePayload(state), ACTIVE_SAVE_ID);
-        return true;
-    } catch (e) {
-        console.warn('Chronicle: IDB write failed', e);
-        return saveJSON(STORAGE_KEYS.save, buildSavePayload(state));
-    }
-};
-
-export const clearActiveSave = async () => {
-    try { await idbDelete('saves', ACTIVE_SAVE_ID); } catch { /* ignore */ }
-    try { await deleteImagesForSave(ACTIVE_SAVE_ID); } catch { /* ignore */ }
-    try { await deleteCodexImagesForSave(ACTIVE_SAVE_ID); } catch { /* ignore */ }
+const clearLegacyActive = async () => {
+    try { await idbDelete('saves', LEGACY_ACTIVE_ID); } catch { /* ignore */ }
+    try { await deleteImagesForSave(LEGACY_ACTIVE_ID); } catch { /* ignore */ }
+    try { await deleteCodexImagesForSave(LEGACY_ACTIVE_ID); } catch { /* ignore */ }
     try { localStorage.removeItem(STORAGE_KEYS.save); } catch { /* ignore */ }
 };
 
-export const attachStoredImages = async (save, saveId = ACTIVE_SAVE_ID) => {
+export const attachStoredImages = async (save, saveId) => {
     if (!save?.history) return save;
     if (!saveId) {
         return { ...save, history: save.history.map((turn) => (turn?.type === 'ai' ? { ...turn, image: turn.image || null } : turn)) };
@@ -367,14 +358,14 @@ export const attachStoredImages = async (save, saveId = ACTIVE_SAVE_ID) => {
     return { ...save, history };
 };
 
-export const attachCodexPortraits = async (codex, saveId = ACTIVE_SAVE_ID) => {
+export const attachCodexPortraits = async (codex, saveId) => {
     const src = normalizeCodex(codex);
+    if (!saveId) return src;
     for (const cat of ['characters', 'places', 'items']) {
         for (const [key, data] of Object.entries(src[cat] || {})) {
             if (data.portraitUrl) continue;
             try {
-                const blob = (saveId && await getCodexImage(saveId, cat, key))
-                    || await getCodexImage(ACTIVE_SAVE_ID, cat, key);
+                const blob = await getCodexImage(saveId, cat, key);
                 if (blob) src[cat][key] = { ...data, portraitUrl: URL.createObjectURL(blob), hasPortrait: true };
             } catch { /* ignore */ }
         }
@@ -417,25 +408,29 @@ const writeSlotIndex = async (index) => {
     return index;
 };
 
-export const createStorySlot = async (state, keepLastNImages = 0) => {
-    const id = `slot_${Date.now()}`;
+let slotSeq = 0;
+const newSlotId = () => {
+    slotSeq += 1;
+    return `slot_${Date.now()}_${slotSeq}`;
+};
+
+// Every story lives in its own slot; page images and codex portraits are
+// keyed by the slot id and written directly by the engine (no mirroring).
+export const createStorySlot = async (state) => {
+    const id = newSlotId();
     const payload = buildSavePayload(state);
     const entry = slotMetaFromState(id, state);
     await idbPut('saves', payload, id);
-    try { await copyImages(ACTIVE_SAVE_ID, id, keepLastNImages); } catch { /* ignore */ }
-    try { await copyCodexImages(ACTIVE_SAVE_ID, id); } catch { /* ignore */ }
     const prev = await listSlots();
     await writeSlotIndex([entry, ...prev.filter((s) => s.id !== id)]);
     await setCurrentSlotId(id);
     return entry;
 };
 
-export const writeStorySlot = async (id, state, keepLastNImages = 0) => {
+export const writeStorySlot = async (id, state) => {
     if (!id) return null;
     const payload = buildSavePayload(state);
     await idbPut('saves', payload, id);
-    try { await copyImages(ACTIVE_SAVE_ID, id, keepLastNImages); } catch { /* ignore */ }
-    try { await copyCodexImages(ACTIVE_SAVE_ID, id); } catch { /* ignore */ }
     const prev = await listSlots();
     const existing = prev.find((s) => s.id === id) || null;
     const entry = slotMetaFromState(id, state, existing);
@@ -463,8 +458,8 @@ export const reorderSlots = async (id, direction) => {
     return writeSlotIndex(next);
 };
 
-export const saveToSlot = async (name, state, keepLastNImages = 0) => {
-    const entry = await createStorySlot(state, keepLastNImages);
+export const saveToSlot = async (name, state) => {
+    const entry = await createStorySlot(state);
     if (name) await renameSlot(entry.id, name);
     const latest = (await listSlots()).find((s) => s.id === entry.id);
     return latest || { ...entry, name: name || entry.name };
@@ -480,14 +475,41 @@ export const deleteSlot = async (id) => {
     return writeSlotIndex(next);
 };
 
-export const ensureActiveMigratedToLibrary = async () => {
+const ACTIVE_MIGRATED_KEY = 'activeMigratedV4';
+
+/**
+ * One-time migration from the pre-3.3 layout, where the current story was
+ * mirrored into a shared 'active' save with its own image/portrait keys.
+ * Moves that media onto the current slot (creating one if needed) and
+ * deletes the mirror. Returns the current slot id, or null.
+ */
+export const migrateLegacyActive = async () => {
     const existingId = await getCurrentSlotId();
     const slots = await listSlots();
-    if (existingId && slots.some((s) => s.id === existingId)) return existingId;
-    const active = await readActiveSave();
-    if (!active || !Array.isArray(active.history) || active.history.length === 0) return existingId || null;
-    const entry = await createStorySlot(active);
-    return entry.id;
+    const currentId = existingId && slots.some((s) => s.id === existingId) ? existingId : null;
+    let done = null;
+    try { done = await idbGet('meta', ACTIVE_MIGRATED_KEY); } catch { /* ignore */ }
+    if (done) return currentId;
+
+    let resultId = currentId;
+    try {
+        const active = await readLegacyActive();
+        if (active && Array.isArray(active.history) && active.history.length > 0) {
+            let targetId = currentId;
+            if (!targetId) {
+                const entry = await createStorySlot(active);
+                targetId = entry.id;
+            }
+            await renameKeyPrefix('images', `${LEGACY_ACTIVE_ID}:`, `${targetId}:`);
+            await renameKeyPrefix('codexImages', `${LEGACY_ACTIVE_ID}:`, `${targetId}:`);
+            resultId = targetId;
+        }
+        await clearLegacyActive();
+        await idbPut('meta', Date.now(), ACTIVE_MIGRATED_KEY);
+    } catch (e) {
+        console.warn('Chronicle: legacy active migration failed', e);
+    }
+    return resultId;
 };
 
 export const loadSlot = async (id) => {
@@ -529,7 +551,4 @@ export const importStoryFile = (file) => new Promise((resolve, reject) => {
     reader.readAsText(file);
 });
 
-// Legacy aliases used during the v2 localStorage era.
-export const readSave = readActiveSave;
-export const writeSave = writeActiveSave;
-export const clearSave = clearActiveSave;
+

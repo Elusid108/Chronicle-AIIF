@@ -1,7 +1,8 @@
 const DB_NAME = 'chronicle';
 const DB_VERSION = 2;
 
-export const ACTIVE_SAVE_ID = 'active';
+// The pre-v3.3 shared "active" save id. Only the legacy migration reads it.
+export const LEGACY_ACTIVE_ID = 'active';
 
 let dbPromise = null;
 
@@ -16,7 +17,16 @@ const openDb = () => {
             if (!db.objectStoreNames.contains('images')) db.createObjectStore('images');
             if (!db.objectStoreNames.contains('codexImages')) db.createObjectStore('codexImages');
         };
-        req.onsuccess = () => resolve(req.result);
+        req.onblocked = () => {
+            console.warn('Chronicle: IndexedDB upgrade blocked by another open tab. Close other Chronicle tabs.');
+        };
+        req.onsuccess = () => {
+            const db = req.result;
+            // If another tab upgrades the schema, drop our handle so the next call reopens.
+            db.onversionchange = () => { try { db.close(); } catch { /* ignore */ } dbPromise = null; };
+            db.onclose = () => { dbPromise = null; };
+            resolve(db);
+        };
         req.onerror = () => {
             dbPromise = null;
             reject(req.error || new Error('IndexedDB open failed'));
@@ -135,38 +145,33 @@ export const pruneTurnImages = async (saveId, keepLastN) => {
     await txDone(tx);
 };
 
-export const copyImages = async (fromId, toId, keepLastN) => {
-    if (!fromId || !toId || fromId === toId) return;
-    if (!keepLastN || keepLastN <= 0) {
-        await deleteImagesForSave(toId);
-        return;
+// Move every `${fromPrefix}…` key to `${toPrefix}…` (legacy migration).
+// Existing destination keys are kept unless overwrite is set.
+export const renameKeyPrefix = async (storeName, fromPrefix, toPrefix, { overwrite = false } = {}) => {
+    if (!fromPrefix || !toPrefix || fromPrefix === toPrefix) return 0;
+    const keys = await idbKeys(storeName);
+    const existing = new Set(keys.map(String));
+    let moved = 0;
+    for (const key of keys) {
+        const k = String(key);
+        if (!k.startsWith(fromPrefix)) continue;
+        const target = `${toPrefix}${k.slice(fromPrefix.length)}`;
+        const db = await openDb();
+        const tx = db.transaction(storeName, 'readwrite');
+        const store = tx.objectStore(storeName);
+        if (overwrite || !existing.has(target)) {
+            const req = store.get(k);
+            req.onsuccess = () => {
+                if (req.result != null) store.put(req.result, target);
+                store.delete(k);
+            };
+            moved += 1;
+        } else {
+            store.delete(k);
+        }
+        await txDone(tx);
     }
-    const keys = await idbKeys('images');
-    const fromIndexed = keys
-        .map((k) => ({ key: k, index: parseTurnIndex(fromId, k) }))
-        .filter((row) => row.index != null);
-    if (!fromIndexed.length) return;
-
-    const toCopy = fromIndexed.sort((a, b) => b.index - a.index).slice(0, keepLastN);
-    const copied = new Set(toCopy.map((row) => row.index));
-    const sourceAll = new Set(fromIndexed.map((row) => row.index));
-
-    for (const row of toCopy) {
-        const blob = await idbGet('images', row.key);
-        if (blob) await putTurnImage(toId, row.index, blob);
-    }
-
-    const destKeys = await idbKeys('images');
-    const db = await openDb();
-    const tx = db.transaction('images', 'readwrite');
-    const store = tx.objectStore('images');
-    for (const key of destKeys) {
-        const index = parseTurnIndex(toId, key);
-        if (index == null) continue;
-        if (copied.has(index)) continue;
-        if (sourceAll.has(index)) store.delete(key);
-    }
-    await txDone(tx);
+    return moved;
 };
 
 export const codexImageKey = (saveId, category, key) =>
@@ -198,18 +203,6 @@ export const deleteCodexImagesForSave = async (saveId) => {
         if (String(key).startsWith(prefix)) store.delete(key);
     }
     await txDone(tx);
-};
-
-export const copyCodexImages = async (fromId, toId) => {
-    if (!fromId || !toId || fromId === toId) return;
-    const keys = await idbKeys('codexImages');
-    const prefix = `${fromId}:`;
-    for (const key of keys) {
-        if (!String(key).startsWith(prefix)) continue;
-        const rest = String(key).slice(prefix.length);
-        const blob = await idbGet('codexImages', key);
-        if (blob) await idbPut('codexImages', blob, `${toId}:${rest}`);
-    }
 };
 
 export const copyCodexImageKey = async (saveId, category, fromKey, intoKey) => {

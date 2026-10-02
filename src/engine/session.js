@@ -1,6 +1,6 @@
 import { EMPTY_SCENE, EMPTY_SUMMARY } from '../constants.js';
 import { callGemini, callGeminiText, generateImage, generateSpeech, isAbortError } from '../api/gemini.js';
-import { ACTIVE_SAVE_ID, getCodexImage, pruneTurnImages, putCodexImage, putTurnImage } from '../utils/idb.js';
+import { getCodexImage, pruneTurnImages, putCodexImage, putTurnImage } from '../utils/idb.js';
 import { blobToInlineData, revokeIfBlobUrl, snapshotImage } from '../utils/images.js';
 import { normalizeEntry, normalizeSummary, summaryToText } from '../utils/storage.js';
 import { beginVerboseTurn, verboseEvent } from '../utils/verboseLog.js';
@@ -206,20 +206,16 @@ const patchTurnAt = (setHistory, index, patcher) => {
     });
 };
 
+// Media is keyed by the story slot only.
 export const persistTurnImageBlob = async (slotId, turnIndex, blob, keepLastN) => {
-    if (!blob || !keepLastN) return;
-    await putTurnImage(ACTIVE_SAVE_ID, turnIndex, blob);
-    await pruneTurnImages(ACTIVE_SAVE_ID, keepLastN);
-    if (slotId && slotId !== ACTIVE_SAVE_ID) {
-        await putTurnImage(slotId, turnIndex, blob);
-        await pruneTurnImages(slotId, keepLastN);
-    }
+    if (!blob || !keepLastN || !slotId) return;
+    await putTurnImage(slotId, turnIndex, blob);
+    await pruneTurnImages(slotId, keepLastN);
 };
 
 const persistCodexBlob = async (slotId, category, key, blob) => {
-    if (!blob) return;
-    await putCodexImage(ACTIVE_SAVE_ID, category, key, blob);
-    if (slotId && slotId !== ACTIVE_SAVE_ID) await putCodexImage(slotId, category, key, blob);
+    if (!blob || !slotId) return;
+    await putCodexImage(slotId, category, key, blob);
 };
 
 const patchLiveCodexEntry = (io, hint, category, key, nextEntry) => {
@@ -266,8 +262,7 @@ export const resolveImageReferences = async (codex, scene, narrative, slotId) =>
     const out = [];
     for (const pick of picks) {
         try {
-            const blob = (slotId && await getCodexImage(slotId, pick.category, pick.key))
-                || await getCodexImage(ACTIVE_SAVE_ID, pick.category, pick.key);
+            const blob = slotId ? await getCodexImage(slotId, pick.category, pick.key) : null;
             if (!blob) continue;
             const inline = await blobToInlineData(blob);
             if (inline) out.push({ label: pick.label, mime: inline.mime, data: inline.data });
@@ -304,7 +299,7 @@ export const generateEntryPortrait = async (io, { category, key, data, signal, h
     const snapshotted = await snapshotImage(result.image);
     if (signal?.aborted || !snapshotted.url) return;
     verboseEvent('portrait.stored', { category, key, stats: result.stats });
-    const slotId = snap.currentSlotId || ACTIVE_SAVE_ID;
+    const slotId = snap.currentSlotId || null;
     if (snapshotted.blob) {
         try { await persistCodexBlob(slotId, category, key, snapshotted.blob); } catch { /* ignore */ }
     }
@@ -339,7 +334,7 @@ const runPool = async (items, limit, worker) => {
 };
 
 const hydratePortraitFromStore = async (io, row, slotId, hint) => {
-    const blob = await getCodexImage(slotId, row.cat, row.key) || await getCodexImage(ACTIVE_SAVE_ID, row.cat, row.key);
+    const blob = slotId ? await getCodexImage(slotId, row.cat, row.key) : null;
     if (!blob) return false;
     const url = URL.createObjectURL(blob);
     const nextEntry = {
@@ -367,7 +362,7 @@ export const generateMissingPortraits = async (io, entries, signal, codexHint) =
         const live = io.getSnapshot();
         const data = codexHint?.[row.cat]?.[row.key] || live.codex?.[row.cat]?.[row.key];
         if (!data || data.portraitUrl) return;
-        const slotId = live.currentSlotId || ACTIVE_SAVE_ID;
+        const slotId = live.currentSlotId || null;
         try {
             if (await hydratePortraitFromStore(io, row, slotId, codexHint)) {
                 verboseEvent('portrait.hydrated', { category: row.cat, key: row.key });
@@ -760,7 +755,7 @@ export const processTurn = async (io, promptType, inputVal, base) => {
                     codex: paintingCodex,
                     scene: folded.newScene,
                     narrative,
-                    slotId: snapNow.currentSlotId || ACTIVE_SAVE_ID,
+                    slotId: snapNow.currentSlotId || null,
                     keepLastN: snapNow.prefs?.keepLastNImages || 0,
                     turnIndex: idx,
                     setHistory,
