@@ -18,7 +18,8 @@ export const STORAGE_KEYS = {
     idbMigrated: 'chronicle_idb_migrated',
 };
 
-export const SAVE_VERSION = 3;
+// v4: codexOverrides (player codex edits replayed on rewind), item possession.
+export const SAVE_VERSION = 4;
 
 export const loadJSON = (key, fallback) => {
     try {
@@ -143,6 +144,16 @@ export const normalizeCodex = (codex, persistable = false) => {
     return out;
 };
 
+// Player codex edits, replayed on top of a rebuilt codex (see memory.js applyCodexOverrides).
+export const normalizeOverrides = (overrides) => {
+    const ops = Array.isArray(overrides?.ops) ? overrides.ops : [];
+    return {
+        ops: ops.filter((op) => op && typeof op === 'object'
+            && (op.type === 'patch' || op.type === 'merge')
+            && Number.isFinite(op.atTurn) && typeof op.category === 'string'),
+    };
+};
+
 export const normalizeScene = (scene) => {
     const s = scene && typeof scene === 'object' ? scene : {};
     return {
@@ -201,6 +212,7 @@ export const migrateSave = (data) => {
     return {
         history,
         codex: normalizeCodex(data.codex, true),
+        codexOverrides: normalizeOverrides(data.codexOverrides),
         summary: normalizeSummary(data.summary != null ? data.summary : INITIAL_SUMMARY),
         scene: normalizeScene(data.scene),
         styleCard: typeof data.styleCard === 'string' ? data.styleCard : '',
@@ -221,6 +233,7 @@ export const buildSavePayload = (state) => ({
     version: SAVE_VERSION,
     history: (state.history || []).map(stripTurnMedia),
     codex: normalizeCodex(state.codex, true),
+    codexOverrides: normalizeOverrides(state.codexOverrides),
     summary: normalizeSummary(state.summary),
     scene: normalizeScene(state.scene),
     styleCard: typeof state.styleCard === 'string' ? state.styleCard : '',

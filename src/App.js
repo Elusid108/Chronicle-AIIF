@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { html } from './html.js';
 import { DEFAULT_CONFIG, DEFAULT_CODEX, EMPTY_SCENE } from './constants.js';
 import {
@@ -7,18 +7,21 @@ import {
     attachCodexPortraits, revokeCodexPortraits,
     listSlots, deleteSlot, loadSlot, exportStoryFile, importStoryFile,
     normalizeSummary, createStorySlot, writeStorySlot, renameSlot, reorderSlots,
-    setCurrentSlotId, ensureActiveMigratedToLibrary,
+    setCurrentSlotId, ensureActiveMigratedToLibrary, buildSavePayload,
 } from './utils/storage.js';
 import { fetchAvailableModels, generateSpeech } from './api/gemini.js';
 import { buildInitialPrompt, buildSystemPrompt } from './engine/prompt.js';
-import { mergeCodexKeys, overlayCodexRuntime, updateCodexEntry } from './engine/memory.js';
+import {
+    appendCodexOverride, mergeCodexKeys, overlayCodexRuntime, pruneCodexOverrides, updateCodexEntry,
+} from './engine/memory.js';
 import {
     EMPTY_SUMMARY, abortActiveTurn, abortAllAssetSignals, abortAssetSignal, attachSceneImage,
-    generateEntryPortrait, lastAiIndex, processTurn, rebuildBase,
+    generateEntryPortrait, lastAiIndex, processTurn, rebuildBase, sceneJobKey,
     startAssetSignal,
 } from './engine/session.js';
 import { revokeHistoryImages, revokeIfBlobUrl } from './utils/images.js';
-import { ACTIVE_SAVE_ID, copyCodexImageKey, copyCodexImages, copyImages, deleteCodexImage, getCodexImage } from './utils/idb.js';
+import { ACTIVE_SAVE_ID, copyCodexImageKey, copyCodexImages, copyImages, deleteCodexImage, deleteTurnImagesFrom, getCodexImage } from './utils/idb.js';
+import { escapeHtml, safeImageSrc } from './utils/text.js';
 import { downloadVerboseLog, setVerboseEnabled } from './utils/verboseLog.js';
 import { ApiKeyModal } from './components/ApiKeyModal.js';
 import { SetupView } from './components/SetupView.js';
@@ -36,7 +39,12 @@ const DEFAULT_PREFS = {
     keepLastNImages: 4,
     pacing: 'standard',
     verboseLogging: false,
+    loreBackfill: true,
+    storyRecall: true,
 };
+
+const EMPTY_OVERRIDES = { ops: [] };
+const AUTOSAVE_DEBOUNCE_MS = 500;
 
 export function App() {
     const [apiKey, setApiKey] = useState('');
@@ -65,6 +73,7 @@ export function App() {
 
     const [history, setHistory] = useState([]);
     const [codex, setCodex] = useState({ ...DEFAULT_CODEX });
+    const [codexOverrides, setCodexOverrides] = useState(EMPTY_OVERRIDES);
     const [currentSlideIndex, setCurrentSlideIndex] = useState(0);
     const [summary, setSummary] = useState({ ...EMPTY_SUMMARY });
     const [scene, setScene] = useState({ ...EMPTY_SCENE });
@@ -88,12 +97,17 @@ export function App() {
     const [isPlaying, setIsPlaying] = useState(false);
     const [previewPlaying, setPreviewPlaying] = useState(false);
     const audioRef = useRef(null);
-    const playingTurnRef = useRef(null);
+    const audioUrlRef = useRef(null);
+    const playingIndexRef = useRef(-1);
+    const autoPlayedIndexRef = useRef(-1);
+    const speakSeq = useRef(0);
     const toastTimer = useRef(null);
     const abortRef = useRef(null);
     const assetAbortMap = useRef(new Map());
     const snapshotRef = useRef({});
-    const saveWriteId = useRef(0);
+    const saveQueue = useRef({ timer: null, pending: null, chain: Promise.resolve(), lastJson: '' });
+    const bootReady = useRef(null);
+    const startingRef = useRef(false);
 
     const touchStart = useRef(null);
     const touchEnd = useRef(null);
@@ -101,7 +115,7 @@ export function App() {
     const textScrollRef = useRef(null);
 
     snapshotRef.current = {
-        history, codex, summary, stats, scene, styleCard, config, initialContext,
+        history, codex, codexOverrides, summary, stats, scene, styleCard, config, initialContext,
         prefs, isEnding, turnsRemaining, isFinished, mediaStatus, apiKey, modelPrefs,
         currentSlotId,
     };
@@ -136,11 +150,15 @@ export function App() {
     useEffect(() => {
         const storedKey = localStorage.getItem(STORAGE_KEYS.apiKey);
         if (storedKey) setApiKey(storedKey);
-        (async () => {
-            await initStorage();
-            const id = await ensureActiveMigratedToLibrary();
-            setCurrentSlotIdState(id);
-            setSlots(await listSlots());
+        bootReady.current = (async () => {
+            try {
+                await initStorage();
+                const id = await ensureActiveMigratedToLibrary();
+                setCurrentSlotIdState(id);
+                setSlots(await listSlots());
+            } catch (e) {
+                console.warn('Chronicle: storage boot failed', e);
+            }
         })();
     }, []);
 
@@ -153,26 +171,57 @@ export function App() {
         if (apiKey && availableModels.text.length === 0) fetchModels();
     }, [apiKey]);
 
-    useEffect(() => {
-        if (view !== 'game') return;
-        if (history.length === 0) return;
-        const writeId = ++saveWriteId.current;
-        let cancelled = false;
-        const state = {
-            history, codex, summary, scene, styleCard, currentSlideIndex, isEnding, turnsRemaining,
-            isFinished, exportDetails, config, initialContext, stats,
-        };
-        (async () => {
-            await initStorage();
-            if (cancelled || writeId !== saveWriteId.current) return;
-            await writeActiveSave(state);
-            if (currentSlotId) {
-                await writeStorySlot(currentSlotId, state, prefs.keepLastNImages || 0);
-                if (!cancelled) setSlots(await listSlots());
+    // Autosave: debounced, serialized, deduplicated by payload. Media patches
+    // (portraits, audio, images) produce identical payloads and are skipped.
+    const flushSave = () => {
+        const q = saveQueue.current;
+        clearTimeout(q.timer);
+        q.timer = null;
+        const job = q.pending;
+        q.pending = null;
+        if (!job) return q.chain;
+        q.chain = q.chain.then(async () => {
+            try {
+                await initStorage();
+                const payloadJson = JSON.stringify(buildSavePayload(job.state));
+                if (payloadJson === q.lastJson && job.slotId === q.lastSlotId) return;
+                await writeStorySlot(job.slotId, job.state, job.keepLastN);
+                q.lastJson = payloadJson;
+                q.lastSlotId = job.slotId;
+                setSlots(await listSlots());
+            } catch (e) {
+                console.warn('Chronicle: autosave failed', e);
+                if (e?.name === 'QuotaExceededError') {
+                    showToast('error', 'Storage is full. Lower "Keep last N images" in Settings or delete a story.');
+                } else {
+                    showToast('error', `Could not save the story: ${e?.message || e}`);
+                }
             }
-        })();
-        return () => { cancelled = true; };
-    }, [view, history, codex, summary, scene, styleCard, currentSlideIndex, isEnding, turnsRemaining, isFinished, exportDetails, config, initialContext, stats, currentSlotId, prefs.keepLastNImages]);
+        });
+        return q.chain;
+    };
+
+    useEffect(() => {
+        if (view !== 'game' || history.length === 0 || !currentSlotId) return undefined;
+        const q = saveQueue.current;
+        q.pending = {
+            slotId: currentSlotId,
+            keepLastN: prefs.keepLastNImages || 0,
+            state: {
+                history, codex, codexOverrides, summary, scene, styleCard, currentSlideIndex, isEnding, turnsRemaining,
+                isFinished, exportDetails, config, initialContext, stats,
+            },
+        };
+        clearTimeout(q.timer);
+        q.timer = setTimeout(flushSave, AUTOSAVE_DEBOUNCE_MS);
+        return undefined;
+    }, [view, history, codex, codexOverrides, summary, scene, styleCard, currentSlideIndex, isEnding, turnsRemaining, isFinished, exportDetails, config, initialContext, stats, currentSlotId]);
+
+    useEffect(() => {
+        const onHide = () => { flushSave(); };
+        window.addEventListener('pagehide', onHide);
+        return () => window.removeEventListener('pagehide', onHide);
+    }, []);
 
     useEffect(() => {
         let animationFrame;
@@ -198,11 +247,15 @@ export function App() {
         ensureCodexPortrait(selectedCodexEntry.category, selectedCodexEntry.title);
     }, [selectedCodexEntry?.category, selectedCodexEntry?.title]);
 
+    // Auto-play narrates each new page once. Tracking by index (not object
+    // identity) means later patches to the turn (image, lore) never restart it.
     useEffect(() => {
         const currentTurn = history[currentSlideIndex];
-        if (view === 'game' && prefs.autoPlay && mediaStatus.audio !== 'disabled' && currentSlideIndex === history.length - 1 && currentTurn?.type === 'ai' && currentTurn.audio && !isPlaying && playingTurnRef.current !== currentTurn) {
-            handleSpeak(currentTurn);
-        }
+        if (view !== 'game' || !prefs.autoPlay || mediaStatus.audio === 'disabled') return;
+        if (currentSlideIndex !== history.length - 1 || currentTurn?.type !== 'ai' || !currentTurn.audio) return;
+        if (autoPlayedIndexRef.current === currentSlideIndex || isPlaying) return;
+        autoPlayedIndexRef.current = currentSlideIndex;
+        handleSpeak(currentTurn, currentSlideIndex);
     }, [view, currentSlideIndex, history, prefs.autoPlay, mediaStatus.audio]);
 
     useEffect(() => {
@@ -244,7 +297,9 @@ export function App() {
     const imageDeps = () => ({
         apiKey, modelPrefs,
         config: snapshotRef.current.config || config,
-        mediaStatus, setMediaStatus, setStatus,
+        mediaStatus: snapshotRef.current.mediaStatus || mediaStatus,
+        setMediaStatus, setStatus,
+        notify: showToast,
         availableImageModels: (availableModels.image || []).map((m) => m.id),
     });
     const speechDeps = () => ({ apiKey, modelPrefs, prefs, mediaStatus, setMediaStatus, setStatus });
@@ -253,13 +308,13 @@ export function App() {
         if (!turn?.image_prompt) return;
         const live = snapshotRef.current;
         setGeneratingAssets((prev) => ({ ...prev, image: true }));
-        const imageSignal = startAssetSignal(assetAbortMap, `scene:${idx}`);
+        const imageSignal = startAssetSignal(assetAbortMap, sceneJobKey(idx));
         attachSceneImage({
             io: turnIo(),
             imageDeps,
             prompt: turn.image_prompt,
             codex: live.codex,
-            scene: live.scene,
+            scene: turn.scene || live.scene,
             narrative: turn.narrative,
             slotId: live.currentSlotId || ACTIVE_SAVE_ID,
             keepLastN: live.prefs?.keepLastNImages || 0,
@@ -269,9 +324,7 @@ export function App() {
             showToast,
             setGeneratingAssets,
             assetAbortMap,
-        }).catch(() => {
-            setGeneratingAssets((prev) => ({ ...prev, image: false }));
-        });
+        }).catch(() => { /* attachSceneImage clears the flag in its finally */ });
     };
 
     const retryTurnImage = () => {
@@ -289,65 +342,118 @@ export function App() {
         try {
             const blob = await getCodexImage(slotId, category, key) || await getCodexImage(ACTIVE_SAVE_ID, category, key);
             if (blob) {
+                const current = snapshotRef.current.codex?.[category]?.[key];
+                if (!current) return;
+                if (current.portraitUrl) return; // another path hydrated it meanwhile
                 const url = URL.createObjectURL(blob);
+                const nextEntry = { ...current, hasPortrait: true, portraitUrl: url };
                 setCodex((prev) => {
                     if (!prev[category]?.[key]) return prev;
-                    const nextEntry = { ...prev[category][key], hasPortrait: true, portraitUrl: url };
-                    setSelectedCodexEntry((sel) => (
-                        sel && sel.category === category && sel.title === key ? { ...sel, data: nextEntry } : sel
-                    ));
+                    if (prev[category][key].portraitUrl) { revokeIfBlobUrl(url); return prev; }
                     return { ...prev, [category]: { ...prev[category], [key]: nextEntry } };
                 });
+                setSelectedCodexEntry((sel) => (
+                    sel && sel.category === category && sel.title === key ? { ...sel, data: nextEntry } : sel
+                ));
                 return;
             }
         } catch { /* generate */ }
-        const signal = startAssetSignal(assetAbortMap, `portrait:${category}:${key}`);
+        const signal = startAssetSignal(assetAbortMap, `bg:portrait:${category}:${key}`);
         generateEntryPortrait(turnIo(), { category, key, data: entry, signal }).catch(() => {});
     };
 
-    const stopAudio = () => {
-        if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
-        if ('speechSynthesis' in window) window.speechSynthesis.cancel();
-        setIsPlaying(false); setPreviewPlaying(false); playingTurnRef.current = null;
+    const releaseAudio = () => {
+        if (audioRef.current) {
+            try { audioRef.current.pause(); } catch { /* ignore */ }
+            audioRef.current.onended = null;
+            audioRef.current.onerror = null;
+            audioRef.current = null;
+        }
+        if (audioUrlRef.current) { revokeIfBlobUrl(audioUrlRef.current); audioUrlRef.current = null; }
     };
 
-    const handleSpeak = async (turn) => {
+    const stopAudio = () => {
+        speakSeq.current += 1;
+        releaseAudio();
+        if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+        setIsPlaying(false); setPreviewPlaying(false); playingIndexRef.current = -1;
+    };
+
+    const playBlob = (blob, onDone) => {
+        releaseAudio();
+        const url = URL.createObjectURL(blob);
+        audioUrlRef.current = url;
+        const audio = new Audio(url);
+        audioRef.current = audio;
+        const finish = () => {
+            if (audioRef.current === audio) releaseAudio();
+            onDone();
+        };
+        audio.onended = finish;
+        audio.onerror = finish;
+        const played = audio.play();
+        if (played && typeof played.catch === 'function') {
+            played.catch((e) => {
+                if (e?.name !== 'AbortError') console.warn('Chronicle: audio play failed', e);
+                finish();
+            });
+        }
+    };
+
+    const handleSpeak = async (turn, index = currentSlideIndex) => {
         if (!turn) return;
-        if (isPlaying && playingTurnRef.current === turn) { stopAudio(); return; }
+        if (isPlaying && playingIndexRef.current === index) { stopAudio(); return; }
         stopAudio();
-        playingTurnRef.current = turn;
+        const seq = ++speakSeq.current;
+        playingIndexRef.current = index;
         setIsPlaying(true);
+        const done = () => {
+            if (speakSeq.current !== seq) return;
+            setIsPlaying(false);
+            playingIndexRef.current = -1;
+        };
 
         let audioContent = turn.audio;
         if (!audioContent) {
-            const result = await generateSpeech(speechDeps(), turn.narrative || '');
+            let result;
+            try {
+                result = await generateSpeech(speechDeps(), turn.narrative || '');
+            } catch (e) {
+                console.warn('Chronicle: speech failed', e);
+                done();
+                return;
+            }
+            if (speakSeq.current !== seq) return; // Stop pressed or another page started meanwhile
             audioContent = result.audio;
-            if (audioContent) setHistory((prev) => prev.map((t) => (t === turn ? { ...t, audio: audioContent, stats: { ...t.stats, audio: result.stats } } : t)));
+            if (audioContent) {
+                setHistory((prev) => prev.map((t, i) => (i === index && t.type === 'ai' ? { ...t, audio: audioContent, stats: { ...t.stats, audio: result.stats } } : t)));
+            }
         }
 
         if (audioContent === 'browser_tts') {
             if ('speechSynthesis' in window) {
                 const utterance = new SpeechSynthesisUtterance('... ' + (turn.narrative || ''));
                 utterance.rate = 1.0; utterance.pitch = 1.0;
-                utterance.onend = () => { setIsPlaying(false); playingTurnRef.current = null; };
-                setTimeout(() => window.speechSynthesis.speak(utterance), 250);
-            } else { setIsPlaying(false); playingTurnRef.current = null; }
+                utterance.onend = done;
+                utterance.onerror = done;
+                setTimeout(() => { if (speakSeq.current === seq) window.speechSynthesis.speak(utterance); }, 250);
+            } else done();
         } else if (audioContent) {
-            const audio = new Audio(URL.createObjectURL(audioContent));
-            audioRef.current = audio;
-            audio.play();
-            audio.onended = () => { setIsPlaying(false); playingTurnRef.current = null; };
-        } else { setIsPlaying(false); playingTurnRef.current = null; }
+            playBlob(audioContent, done);
+        } else done();
     };
 
     const previewVoice = async (voiceName) => {
-        stopAudio(); setPreviewPlaying(true);
-        const result = await generateSpeech(speechDeps(), 'I would love to be your narrator.', voiceName);
-        if (result.audio && result.audio !== 'browser_tts') {
-            const audio = new Audio(URL.createObjectURL(result.audio));
-            audioRef.current = audio;
-            audio.play();
-            audio.onended = () => setPreviewPlaying(false);
+        stopAudio();
+        const seq = speakSeq.current;
+        setPreviewPlaying(true);
+        let result;
+        try {
+            result = await generateSpeech(speechDeps(), 'I would love to be your narrator.', voiceName);
+        } catch { result = null; }
+        if (speakSeq.current !== seq) return;
+        if (result?.audio && result.audio !== 'browser_tts') {
+            playBlob(result.audio, () => { if (speakSeq.current === seq) setPreviewPlaying(false); });
         } else { setPreviewPlaying(false); }
     };
 
@@ -371,6 +477,7 @@ export function App() {
     const emptyStoryState = () => ({
         history: [],
         codex: { ...DEFAULT_CODEX },
+        codexOverrides: EMPTY_OVERRIDES,
         summary: { ...EMPTY_SUMMARY },
         stats: {},
         scene: { ...EMPTY_SCENE },
@@ -384,47 +491,70 @@ export function App() {
         initialContext,
     });
 
+    // Reset per-story UI state before switching stories.
+    const resetStoryUi = () => {
+        stopAudio();
+        setSelectedCodexEntry(null);
+        setEditingAction(null);
+        setUserInput('');
+        setActivePanel(null);
+        autoPlayedIndexRef.current = -1;
+    };
+
     const startGame = async () => {
-        abortActiveTurn(abortRef);
-        abortAllAssetSignals(assetAbortMap);
-        revokeHistoryImages(history);
-        revokeCodexPortraits(codex);
-        saveWriteId.current += 1;
-        await initStorage();
-        await clearActiveSave();
-        const storyConfig = { ...setupConfig };
-        const fresh = { ...emptyStoryState(), config: storyConfig };
-        const entry = await createStorySlot(fresh, 0);
-        const resetSnap = {
-            ...snapshotRef.current,
-            ...fresh,
-            currentSlotId: entry.id,
-        };
-        snapshotRef.current = resetSnap;
-        setConfig(storyConfig);
-        setCurrentSlotIdState(entry.id);
-        setSlots(await listSlots());
-        setHistory([]);
-        setCodex({ ...DEFAULT_CODEX });
-        setSummary({ ...EMPTY_SUMMARY });
-        setScene({ ...EMPTY_SCENE });
-        setStyleCard('');
-        setStats({});
-        setCurrentSlideIndex(0);
-        setIsEnding(false); setTurnsRemaining(null); setIsFinished(false);
-        setExportDetails({ title: 'The Unnamed Chronicle', author: 'Anonymous' });
-        setView('game');
-        setIsStreaming(true);
-        setStreamingText('');
-        setLoading(false);
-        runTurn('initial', buildInitialPrompt(storyConfig, initialContext), {
-            history: [],
-            codex: { ...DEFAULT_CODEX },
-            summary: { ...EMPTY_SUMMARY },
-            stats: {},
-            scene: { ...EMPTY_SCENE },
-            styleCard: '',
-        });
+        if (startingRef.current) return;
+        startingRef.current = true;
+        setLoading(true);
+        try {
+            abortActiveTurn(abortRef);
+            abortAllAssetSignals(assetAbortMap);
+            await flushSave();
+            await bootReady.current;
+            revokeHistoryImages(history);
+            revokeCodexPortraits(codex);
+            await initStorage();
+            await clearActiveSave();
+            const storyConfig = { ...setupConfig };
+            const fresh = { ...emptyStoryState(), config: storyConfig };
+            const entry = await createStorySlot(fresh, 0);
+            const resetSnap = {
+                ...snapshotRef.current,
+                ...fresh,
+                currentSlotId: entry.id,
+            };
+            snapshotRef.current = resetSnap;
+            resetStoryUi();
+            setConfig(storyConfig);
+            setCurrentSlotIdState(entry.id);
+            setSlots(await listSlots());
+            setHistory([]);
+            setCodex({ ...DEFAULT_CODEX });
+            setCodexOverrides(EMPTY_OVERRIDES);
+            setSummary({ ...EMPTY_SUMMARY });
+            setScene({ ...EMPTY_SCENE });
+            setStyleCard('');
+            setStats({});
+            setCurrentSlideIndex(0);
+            setIsEnding(false); setTurnsRemaining(null); setIsFinished(false);
+            setExportDetails({ title: 'The Unnamed Chronicle', author: 'Anonymous' });
+            setView('game');
+            setIsStreaming(true);
+            setStreamingText('');
+            setLoading(false);
+            runTurn('initial', buildInitialPrompt(storyConfig, initialContext), {
+                history: [],
+                codex: { ...DEFAULT_CODEX },
+                summary: { ...EMPTY_SUMMARY },
+                stats: {},
+                scene: { ...EMPTY_SCENE },
+                styleCard: '',
+            });
+        } catch (e) {
+            setLoading(false);
+            showToast('error', `Could not start the story: ${e?.message || e}`);
+        } finally {
+            startingRef.current = false;
+        }
     };
 
     const retryOpening = () => {
@@ -451,27 +581,39 @@ export function App() {
     const applyBase = (b) => {
         abortAllAssetSignals(assetAbortMap);
         revokeHistoryImages(history.slice(b.history.length));
+        const prunedOverrides = pruneCodexOverrides(snapshotRef.current.codexOverrides, b.history.filter((t) => t.type === 'ai').length);
+        const nextCodex = overlayCodexRuntime(b.codex, snapshotRef.current.codex);
+        const nextScene = b.scene || { ...EMPTY_SCENE };
+        const isEndingNext = Boolean(b.isEnding);
+        const remainingNext = isEndingNext ? (b.turnsRemaining ?? null) : null;
+        const finishedNext = Boolean(b.isFinished);
         setHistory(b.history);
-        setCodex(overlayCodexRuntime(b.codex, snapshotRef.current.codex));
+        setCodex(nextCodex);
+        setCodexOverrides(prunedOverrides);
         setSummary(b.summary);
         setStats(b.stats);
-        setScene(b.scene || { ...EMPTY_SCENE });
+        setScene(nextScene);
         if (b.styleCard !== undefined) setStyleCard(b.styleCard);
         setCurrentSlideIndex(Math.max(0, b.history.length - 1));
-        setIsFinished(false); setIsEnding(false); setTurnsRemaining(null);
+        setIsFinished(finishedNext); setIsEnding(isEndingNext); setTurnsRemaining(remainingNext);
+        setEditingAction(null);
+        autoPlayedIndexRef.current = -1;
         snapshotRef.current = {
             ...snapshotRef.current,
             history: b.history,
-            codex: b.codex,
+            codex: nextCodex,
+            codexOverrides: prunedOverrides,
             summary: b.summary,
             stats: b.stats,
-            scene: b.scene || { ...EMPTY_SCENE },
+            scene: nextScene,
             styleCard: b.styleCard !== undefined ? b.styleCard : snapshotRef.current.styleCard,
             currentSlideIndex: Math.max(0, b.history.length - 1),
-            isFinished: false,
-            isEnding: false,
-            turnsRemaining: null,
+            isFinished: finishedNext,
+            isEnding: isEndingNext,
+            turnsRemaining: remainingNext,
         };
+        const slotId = snapshotRef.current.currentSlotId;
+        if (slotId) deleteTurnImagesFrom(slotId, b.history.length).catch(() => {});
     };
 
     const rewindTurn = () => {
@@ -479,7 +621,7 @@ export function App() {
         if (idx <= 0) return;
         abortActiveTurn(abortRef);
         stopAudio();
-        applyBase(rebuildBase(history.slice(0, idx), summary));
+        applyBase(rebuildBase(history.slice(0, idx), summary, codexOverrides));
         showToast('info', 'Rewound one turn');
     };
 
@@ -488,10 +630,10 @@ export function App() {
         if (idx < 0) return;
         const lastTurn = history[idx];
         abortActiveTurn(abortRef);
-        abortAssetSignal(assetAbortMap, `scene:${idx}`);
+        abortAssetSignal(assetAbortMap, sceneJobKey(idx));
         stopAudio();
         const remaining = history.slice(0, idx);
-        const base = rebuildBase(remaining, summary);
+        const base = rebuildBase(remaining, summary, codexOverrides);
         applyBase(base);
         if (lastTurn.userActionPreceding == null) {
             setStyleCard('');
@@ -523,9 +665,9 @@ export function App() {
         const idx = lastAiIndex(history);
         if (idx < 0) return;
         abortActiveTurn(abortRef);
-        abortAssetSignal(assetAbortMap, `scene:${idx}`);
+        abortAssetSignal(assetAbortMap, sceneJobKey(idx));
         stopAudio();
-        const base = rebuildBase(history.slice(0, idx), summary);
+        const base = rebuildBase(history.slice(0, idx), summary, codexOverrides);
         applyBase(base);
         setEditingAction(null);
         runTurn('continue', text, base);
@@ -560,7 +702,7 @@ export function App() {
         revokeCodexPortraits(codex);
         await initStorage();
         await clearActiveSave();
-        setHistory([]); setCodex({ ...DEFAULT_CODEX }); setCurrentSlideIndex(0);
+        setHistory([]); setCodex({ ...DEFAULT_CODEX }); setCodexOverrides(EMPTY_OVERRIDES); setCurrentSlideIndex(0);
         setSummary({ ...EMPTY_SUMMARY }); setScene({ ...EMPTY_SCENE }); setStyleCard(''); setStats({}); setUserInput('');
         setIsEnding(false); setTurnsRemaining(null); setIsFinished(false);
         setLoading(false); setIsStreaming(false); setStreamingText('');
@@ -576,9 +718,9 @@ export function App() {
         setIsStreaming(false);
         setStreamingText('');
         setLoading(false);
-        stopAudio();
+        resetStoryUi();
         setView('setup');
-        setActivePanel(null);
+        await flushSave();
         setSlots(await listSlots());
     };
     const confirmAbandon = () => { setShowExitConfirm(false); resetGame(); setView('setup'); };
@@ -590,13 +732,18 @@ export function App() {
         togglePanel(null);
     };
 
+    // Player edits are applied live AND recorded so rewind/regenerate replay them.
     const saveCodexEdits = (category, key, patch) => {
-        setCodex((prev) => {
-            const next = updateCodexEntry(prev, category, key, patch);
-            const data = next[category]?.[key];
-            setSelectedCodexEntry((sel) => (sel && sel.category === category && sel.title === key ? { ...sel, data } : sel));
-            return next;
-        });
+        const live = snapshotRef.current;
+        if (!live.codex?.[category]?.[key]) return;
+        const next = updateCodexEntry(live.codex, category, key, patch);
+        const data = next[category]?.[key];
+        const atTurn = (live.history || []).filter((t) => t.type === 'ai').length;
+        const overrides = appendCodexOverride(live.codexOverrides, { type: 'patch', atTurn, category, key, patch });
+        snapshotRef.current = { ...live, codex: next, codexOverrides: overrides };
+        setCodex(next);
+        setCodexOverrides(overrides);
+        setSelectedCodexEntry((sel) => (sel && sel.category === category && sel.title === key ? { ...sel, data } : sel));
     };
 
     const regenerateCodexPortrait = async (category, key) => {
@@ -608,15 +755,15 @@ export function App() {
             await deleteCodexImage(slotId, category, key);
             if (slotId !== ACTIVE_SAVE_ID) await deleteCodexImage(ACTIVE_SAVE_ID, category, key);
         } catch { /* generate anyway */ }
+        const nextEntry = { ...entry, hasPortrait: false, portraitUrl: '' };
         setCodex((prev) => {
             if (!prev[category]?.[key]) return prev;
-            const nextEntry = { ...prev[category][key], hasPortrait: false, portraitUrl: '' };
-            setSelectedCodexEntry((sel) => (
-                sel && sel.category === category && sel.title === key ? { ...sel, data: nextEntry } : sel
-            ));
-            return { ...prev, [category]: { ...prev[category], [key]: nextEntry } };
+            return { ...prev, [category]: { ...prev[category], [key]: { ...prev[category][key], hasPortrait: false, portraitUrl: '' } } };
         });
-        const signal = startAssetSignal(assetAbortMap, `portrait:${category}:${key}`);
+        setSelectedCodexEntry((sel) => (
+            sel && sel.category === category && sel.title === key ? { ...sel, data: nextEntry } : sel
+        ));
+        const signal = startAssetSignal(assetAbortMap, `bg:portrait:${category}:${key}`);
         generateEntryPortrait(turnIo(), {
             category,
             key,
@@ -628,24 +775,29 @@ export function App() {
     const mergeSelectedInto = (intoKey) => {
         const sel = selectedCodexEntry;
         if (!sel || !intoKey || intoKey === sel.title) return;
-        setCodex((prev) => {
-            const next = mergeCodexKeys(prev, sel.category, sel.title, intoKey);
-            const slotId = snapshotRef.current.currentSlotId || ACTIVE_SAVE_ID;
-            copyCodexImageKey(slotId, sel.category, sel.title, intoKey).catch(() => {});
-            if (slotId !== ACTIVE_SAVE_ID) copyCodexImageKey(ACTIVE_SAVE_ID, sel.category, sel.title, intoKey).catch(() => {});
-            setSelectedCodexEntry(null);
-            return next;
-        });
+        const live = snapshotRef.current;
+        const next = mergeCodexKeys(live.codex, sel.category, sel.title, intoKey);
+        const atTurn = (live.history || []).filter((t) => t.type === 'ai').length;
+        const overrides = appendCodexOverride(live.codexOverrides, { type: 'merge', atTurn, category: sel.category, from: sel.title, into: intoKey });
+        snapshotRef.current = { ...live, codex: next, codexOverrides: overrides };
+        setCodex(next);
+        setCodexOverrides(overrides);
+        setSelectedCodexEntry(null);
+        const slotId = live.currentSlotId || ACTIVE_SAVE_ID;
+        copyCodexImageKey(slotId, sel.category, sel.title, intoKey).catch(() => {});
+        if (slotId !== ACTIVE_SAVE_ID) copyCodexImageKey(ACTIVE_SAVE_ID, sel.category, sel.title, intoKey).catch(() => {});
     };
 
     const hydrate = async (s, imageSaveId = ACTIVE_SAVE_ID) => {
         abortActiveTurn(abortRef);
         abortAllAssetSignals(assetAbortMap);
+        await flushSave();
         setIsStreaming(false);
         setStreamingText('');
         setLoading(false);
-        revokeHistoryImages(history);
-        revokeCodexPortraits(codex);
+        resetStoryUi();
+        revokeHistoryImages(snapshotRef.current.history);
+        revokeCodexPortraits(snapshotRef.current.codex);
         const withImages = await attachStoredImages(s, imageSaveId);
         const withPortraits = await attachCodexPortraits(withImages.codex, imageSaveId);
         if (imageSaveId && imageSaveId !== ACTIVE_SAVE_ID) {
@@ -656,6 +808,7 @@ export function App() {
         }
         setHistory(withImages.history);
         setCodex(withPortraits);
+        setCodexOverrides(withImages.codexOverrides || EMPTY_OVERRIDES);
         setSummary(normalizeSummary(withImages.summary));
         setScene(withImages.scene || { ...EMPTY_SCENE });
         setStyleCard(withImages.styleCard || '');
@@ -673,6 +826,7 @@ export function App() {
             ...snapshotRef.current,
             history: withImages.history,
             codex: withPortraits,
+            codexOverrides: withImages.codexOverrides || EMPTY_OVERRIDES,
             summary: loadedSummary,
             scene: loadedScene,
             styleCard: withImages.styleCard || '',
@@ -688,9 +842,8 @@ export function App() {
         setConfig(loadedConfig);
         setInitialContext(withImages.initialContext);
         setView('game'); setActivePanel(null);
-        withImages.history.forEach((turn, idx) => {
-            if (turn.type === 'ai' && turn.image_prompt && !turn.image) regenImageForIndex(idx, turn);
-        });
+        // Missing page images are NOT regenerated on load (each is a paid image
+        // call); the "Retry image" button on a page regenerates it on demand.
     };
 
     const resumeLatestStory = async () => {
@@ -708,9 +861,20 @@ export function App() {
 
     const refreshSlots = async () => setSlots(await listSlots());
     const loadSlotById = async (id) => {
-        const s = await loadSlot(id);
-        if (!s) { showToast('error', 'Could not load save'); return; }
-        await hydrate(s, id);
+        if (startingRef.current) return;
+        startingRef.current = true;
+        setLoading(true);
+        try {
+            await bootReady.current;
+            const s = await loadSlot(id);
+            if (!s) { showToast('error', 'Could not load save'); return; }
+            await hydrate(s, id);
+        } catch (e) {
+            showToast('error', `Could not load the story: ${e?.message || e}`);
+        } finally {
+            setLoading(false);
+            startingRef.current = false;
+        }
     };
     const deleteSlotById = async (id) => {
         const next = await deleteSlot(id);
@@ -728,7 +892,7 @@ export function App() {
     };
     const exportStory = () => {
         exportStoryFile({
-            history, codex, summary, scene, styleCard, currentSlideIndex, isEnding, turnsRemaining,
+            history, codex, codexOverrides, summary, scene, styleCard, currentSlideIndex, isEnding, turnsRemaining,
             isFinished, exportDetails, config, initialContext, stats,
         });
         showToast('info', 'Story exported');
@@ -745,8 +909,11 @@ export function App() {
         }
     };
 
+    // Everything written into the book window is escaped: the window shares
+    // this app's origin, so unescaped model output could read localStorage.
     const exportBook = () => {
         const bookWindow = window.open('', '_blank');
+        if (!bookWindow) { showToast('error', 'The browser blocked the book window. Allow pop-ups for this site and try again.'); return; }
         const showToc = history.filter((t) => t.type === 'ai').length > 5;
         let pageCount = 0;
         const tocHtml = history.map((turn, i) => {
@@ -754,11 +921,17 @@ export function App() {
             return '';
         }).join('');
         const contentHtml = history.map((turn, i) => {
-            if (turn.type === 'chapter_marker') return `<div class="chapter-marker"><h2>${turn.title}</h2><hr/></div>`;
-            if (turn.type === 'ai') return `<div id="ch${i}" class="story-turn">${turn.image ? `<img src="${turn.image}" class="turn-img" />` : ''}<div class="turn-text">${(turn.narrative || '').replace(/\n/g, '<br/>')}</div></div>`;
+            if (turn.type === 'chapter_marker') return `<div class="chapter-marker"><h2>${escapeHtml(turn.title)}</h2><hr/></div>`;
+            if (turn.type === 'ai') {
+                const src = safeImageSrc(turn.image);
+                const text = escapeHtml(turn.narrative || '').replace(/\n/g, '<br/>');
+                return `<div id="ch${i}" class="story-turn">${src ? `<img src="${src}" class="turn-img" />` : ''}<div class="turn-text">${text}</div></div>`;
+            }
             return '';
         }).join('');
-        const doc = `<html><head><title>${exportDetails.title}</title><style>@media print { @page { margin: 2cm; size: A4; } body { font-family: 'Georgia', serif; } } body { font-family: 'Georgia', serif; max-width: 800px; margin: 0 auto; padding: 40px; color: #1a1a1a; line-height: 1.6; } h1, h2 { text-align: center; } .turn-img { width: 100%; max-height: 400px; object-fit: contain; margin: 2em 0; display: block; border-radius: 4px; } .turn-text { margin-bottom: 2em; text-align: justify; } .chapter-marker { margin: 4em 0; text-align: center; page-break-before: always; } .toc { margin-top: 4em; page-break-after: always; } .chapter-link { display: block; padding: 0.5em 0; border-bottom: 1px dotted #ccc; text-decoration: none; color: black; } .story-turn { page-break-inside: avoid; margin-bottom: 2em; }</style></head><body><h1 style="margin-top:40vh">${exportDetails.title}</h1><h2>by ${exportDetails.author}</h2>${showToc ? `<div class="toc"><h1>Table of Contents</h1>${tocHtml}</div>` : '<div style="margin-bottom: 4em;"></div>'}${contentHtml}<scr` + `ipt>window.onload=()=>{setTimeout(()=>window.print(),1000);}</scr` + `ipt></body></html>`;
+        const title = escapeHtml(exportDetails.title);
+        const author = escapeHtml(exportDetails.author);
+        const doc = `<html><head><title>${title}</title><style>@media print { @page { margin: 2cm; size: A4; } body { font-family: 'Georgia', serif; } } body { font-family: 'Georgia', serif; max-width: 800px; margin: 0 auto; padding: 40px; color: #1a1a1a; line-height: 1.6; } h1, h2 { text-align: center; } .turn-img { width: 100%; max-height: 400px; object-fit: contain; margin: 2em 0; display: block; border-radius: 4px; } .turn-text { margin-bottom: 2em; text-align: justify; } .chapter-marker { margin: 4em 0; text-align: center; page-break-before: always; } .toc { margin-top: 4em; page-break-after: always; } .chapter-link { display: block; padding: 0.5em 0; border-bottom: 1px dotted #ccc; text-decoration: none; color: black; } .story-turn { page-break-inside: avoid; margin-bottom: 2em; }</style></head><body><h1 style="margin-top:40vh">${title}</h1><h2>by ${author}</h2>${showToc ? `<div class="toc"><h1>Table of Contents</h1>${tocHtml}</div>` : '<div style="margin-bottom: 4em;"></div>'}${contentHtml}<scr` + `ipt>window.onload=()=>{setTimeout(()=>window.print(),1000);}</scr` + `ipt></body></html>`;
         bookWindow.document.write(doc);
         bookWindow.document.close();
     };
@@ -785,10 +958,16 @@ export function App() {
     }
     const isLatestSlide = currentSlideIndex === history.length - 1;
 
-    const contextChars = buildSystemPrompt({
-        config, initialContext, summary, codex, history, statsEnabled: prefs.statsEnabled, stats, scene, styleCard,
-        pacing: prefs.pacing,
-    }).length;
+    // Only computed while Settings is open: building the prompt scans the whole codex.
+    const contextChars = useMemo(() => {
+        if (activePanel !== 'settings') return 0;
+        try {
+            return buildSystemPrompt({
+                config, initialContext, summary, codex, history, statsEnabled: prefs.statsEnabled, stats, scene, styleCard,
+                pacing: prefs.pacing,
+            }).length;
+        } catch { return 0; }
+    }, [activePanel, config, initialContext, summary, codex, history, prefs.statsEnabled, stats, scene, styleCard, prefs.pacing]);
 
     if (!apiKey) return html`<${ApiKeyModal} onSave=${handleKeySave} />`;
 

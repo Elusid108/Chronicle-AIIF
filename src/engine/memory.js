@@ -3,12 +3,30 @@ import { normalizeCodex, normalizeEntry, normalizeScene, normalizeSummary, sanit
 
 export const normalizeKey = (key) => String(key || '').trim().replace(/\s+/g, ' ');
 
+// How many unfolded beats the prompt shows and compaction keeps.
+export const BEAT_WINDOW = 14;
+
 const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-export const mentionedIn = (text, name) => {
+// "kael_voss" should also match "Kael Voss" in prose.
+const nameVariants = (name) => {
     const n = normalizeKey(name);
-    if (!n || !text) return false;
-    return new RegExp(`\\b${escapeRegExp(n)}\\b`, 'i').test(text);
+    if (!n) return [];
+    const out = [n];
+    const spaced = n.replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
+    const underscored = spaced.replace(/\s+/g, '_');
+    for (const v of [spaced, underscored]) {
+        if (v && !out.some((x) => x.toLowerCase() === v.toLowerCase())) out.push(v);
+    }
+    return out;
+};
+
+const NAME_BOUNDARY_L = '(?<![A-Za-z0-9_-])';
+const NAME_BOUNDARY_R = '(?![A-Za-z0-9_-])';
+
+export const mentionedIn = (text, name) => {
+    if (!text) return false;
+    return nameVariants(name).some((n) => new RegExp(`\\b${escapeRegExp(n)}\\b`, 'i').test(text));
 };
 
 const resolveCategory = (raw) => {
@@ -18,6 +36,9 @@ const resolveCategory = (raw) => {
     if (catKey === 'item' || catKey === 'artifact' || catKey === 'artifacts' || catKey === 'items') return 'items';
     return null;
 };
+
+// The model clears a free-text field by sending one of these values.
+export const isClearSentinel = (value) => /^(none|n\/a|-|cleared|null)$/i.test(String(value || '').trim());
 
 const findExistingKey = (bucket, rawKey) => {
     const n = normalizeKey(rawKey);
@@ -68,8 +89,12 @@ export const mergeCodex = (prev, updates, currentTurnIndex) => {
         const existingKey = findExistingKey(next[catKey], incomingKey) || incomingKey;
         const existing = next[catKey][existingKey] ? normalizeEntry(next[catKey][existingKey]) : null;
         const aliases = Array.isArray(item.aliases) ? item.aliases.map(normalizeKey).filter(Boolean) : [];
-        const status = typeof item.status === 'string' ? item.status.trim() : '';
-        const location = typeof item.location === 'string' ? item.location.trim() : '';
+        const statusRaw = typeof item.status === 'string' ? item.status.trim() : '';
+        const locationRaw = typeof item.location === 'string' ? item.location.trim() : '';
+        const clearStatus = isClearSentinel(statusRaw);
+        const clearLocation = isClearSentinel(locationRaw);
+        const status = clearStatus ? '' : statusRaw;
+        const location = clearLocation ? '' : locationRaw;
 
         if (existing) {
             const cites = existing.citations.includes(pageNum) ? existing.citations : [...existing.citations, pageNum];
@@ -92,8 +117,8 @@ export const mergeCodex = (prev, updates, currentTurnIndex) => {
                     : existing.description,
                 citations: cites,
                 aliases: mergedAliases,
-                status: status || existing.status,
-                location: location || existing.location,
+                status: clearStatus ? '' : (status || existing.status),
+                location: clearLocation ? '' : (location || existing.location),
                 visual: visual || existing.visual,
             };
         } else {
@@ -165,6 +190,7 @@ const compactForm = (key, data) => {
         location: data.location,
         visual: data.visual,
         source: data.source,
+        pinned: data.pinned || undefined,
     };
 };
 
@@ -183,7 +209,7 @@ export const selectRelevantCodex = (codex, recentText = '', scene = EMPTY_SCENE,
             const mentioned = names.some((n) => mentionedIn(recentText, n));
             const isProtagonist = cat === 'characters' && Object.keys(entries)[0] === key;
             const isCurrentPlace = cat === 'places' && sceneLoc && names.some((n) => mentionedIn(sceneLoc, n) || n.toLowerCase() === sceneLoc.toLowerCase());
-            const always = Boolean(data.source === 'player' || isProtagonist || isCurrentPlace);
+            const always = Boolean(data.source === 'player' || data.pinned || isProtagonist || isCurrentPlace);
             const score = (always ? 200000 : 0) + (mentioned ? 100000 : 0) + lastCite;
             all.push({ cat, key, data, score, always });
         }
@@ -203,7 +229,7 @@ export const selectRelevantCodex = (codex, recentText = '', scene = EMPTY_SCENE,
     return { codex: out, omitted: Math.max(0, all.length - picked.length) };
 };
 
-export const splitBeatsForCompaction = (summary, keepRecent = 14) => {
+export const splitBeatsForCompaction = (summary, keepRecent = BEAT_WINDOW) => {
     const norm = normalizeSummary(summary);
     if (norm.beats.length <= keepRecent + 6) return null;
     const toFold = norm.beats.slice(0, norm.beats.length - keepRecent);
@@ -224,14 +250,42 @@ export const mergeScene = (prev, update) => {
     const base = normalizeScene(prev || EMPTY_SCENE);
     if (!update || typeof update !== 'object') return base;
     const next = normalizeScene(update);
+    // Arrays are authoritative whenever the update carries them (even empty):
+    // that is how characters leave a scene and threads get resolved. A
+    // salvaged turn has no scene keys at all, so the previous scene survives.
     return {
         location: next.location || base.location,
         time_of_day: next.time_of_day || base.time_of_day,
-        present_characters: next.present_characters.length ? next.present_characters : base.present_characters,
+        present_characters: Array.isArray(update.present_characters) ? next.present_characters : base.present_characters,
         goal: next.goal || base.goal,
-        open_threads: next.open_threads.length ? next.open_threads : base.open_threads,
+        open_threads: Array.isArray(update.open_threads) ? next.open_threads : base.open_threads,
     };
 };
+
+/**
+ * Player codex edits replayed on top of a rebuilt codex (rewind/regenerate).
+ * overrides = { ops: [{ type: 'patch', atTurn, category, key, patch } |
+ *                     { type: 'merge', atTurn, category, from, into }] }
+ * atTurn = number of AI turns in history when the player made the edit.
+ */
+export const applyCodexOverrides = (codex, overrides, atTurn) => {
+    const ops = Array.isArray(overrides?.ops) ? overrides.ops : [];
+    let next = codex;
+    for (const op of ops) {
+        if (!op || op.atTurn !== atTurn) continue;
+        if (op.type === 'patch') next = updateCodexEntry(next, op.category, op.key, op.patch || {});
+        else if (op.type === 'merge') next = mergeCodexKeys(next, op.category, op.from, op.into);
+    }
+    return next;
+};
+
+export const pruneCodexOverrides = (overrides, maxTurn) => ({
+    ops: (Array.isArray(overrides?.ops) ? overrides.ops : []).filter((op) => op && op.atTurn <= maxTurn),
+});
+
+export const appendCodexOverride = (overrides, op) => ({
+    ops: [...(Array.isArray(overrides?.ops) ? overrides.ops : []), op],
+});
 
 export const updateCodexEntry = (codex, category, key, patch) => {
     const next = normalizeCodex(codex);
@@ -289,34 +343,111 @@ export const mergeCodexKeys = (codex, category, fromKey, intoKey) => {
     return next;
 };
 
-export const visualForEntry = (key, data) => {
-    if (data?.visual) return data.visual;
-    const desc = (data?.description || '').split(/[.;]/)[0].trim();
-    if (desc) return desc;
-    return `a figure known as ${key}`;
+const GENERIC_VISUAL = { characters: 'a figure', places: 'a place', items: 'an object' };
+
+const stripNames = (text, names) => {
+    let out = String(text || '');
+    for (const n of names) {
+        out = out.replace(new RegExp(`${NAME_BOUNDARY_L}${escapeRegExp(n)}${NAME_BOUNDARY_R}`, 'gi'), '');
+    }
+    return out.replace(/\s{2,}/g, ' ').replace(/^[\s,;:'"-]+|[\s,;:'"-]+$/g, '').trim();
 };
 
+// A painter-safe description that never contains the entity's own name.
+export const visualForEntry = (key, data, category = 'characters') => {
+    const names = [key, ...(data?.aliases || [])].flatMap(nameVariants);
+    const visual = stripNames(data?.visual || '', names);
+    if (visual) return visual;
+    const desc = stripNames((data?.description || '').split(/[.;]/)[0], names);
+    if (desc) return desc;
+    return GENERIC_VISUAL[category] || 'a figure';
+};
+
+// Proper names shorter than this are left alone for places/items (common
+// nouns like "door"); character names and aliases are always scrubbed.
+const NAME_SCRUB_MIN = { characters: 3, places: 8, items: 8 };
+
+// Replace codex names in an image prompt with their visual descriptions in a
+// single pass, so an inserted visual is never re-scanned for shorter names.
 export const scrubImagePrompt = (prompt, codex) => {
     if (!prompt) return prompt;
-    let out = String(prompt);
-    const names = [];
+    const src = normalizeCodex(codex);
+    const byName = new Map();
+    for (const cat of ['characters', 'places', 'items']) {
+        for (const [key, val] of Object.entries(src[cat] || {})) {
+            const data = normalizeEntry(val);
+            const visual = visualForEntry(key, data, cat);
+            for (const raw of [key, ...(data.aliases || [])]) {
+                for (const n of nameVariants(raw)) {
+                    if (n.length < NAME_SCRUB_MIN[cat]) continue;
+                    const lower = n.toLowerCase();
+                    if (!byName.has(lower)) byName.set(lower, { name: n, visual });
+                }
+            }
+        }
+    }
+    if (!byName.size) return String(prompt);
+    const names = [...byName.values()].map((row) => row.name).sort((a, b) => b.length - a.length);
+    const re = new RegExp(`${NAME_BOUNDARY_L}(?:${names.map(escapeRegExp).join('|')})${NAME_BOUNDARY_R}`, 'gi');
+    return String(prompt).replace(re, (match) => byName.get(match.toLowerCase())?.visual || match);
+};
+
+const PROPER_NOUN_STOP = new Set(('i you the a an it he she they we but and or then when as if your his her their its this that there here what where who why how yes no not so now still just only even every each some all nothing something someone behind beneath above below inside outside beyond before after through across around against without with from into onto over under upon down up out off on in at to for of by do does did is are was were be been will would could should can may might must suddenly somewhere perhaps maybe meanwhile instead otherwise however yet also again once twice finally later soon today tonight tomorrow yesterday mr mrs ms dr sir lord lady captain doctor chapter page end north south east west').split(' '));
+
+// Capitalized, non-sentence-initial words (and runs of them) in the
+// narrative that no codex entry or the scene location accounts for. Used to
+// decide whether the lore backfill call is worth making this turn.
+export const unknownProperNouns = (narrative, codex, scene = EMPTY_SCENE) => {
+    const text = String(narrative || '');
+    if (!text) return [];
+    const known = new Set();
     const src = normalizeCodex(codex);
     for (const cat of ['characters', 'places', 'items']) {
         for (const [key, val] of Object.entries(src[cat] || {})) {
-            const n = normalizeKey(key);
-            if (!n || n.length < 8) continue;
-            names.push({ name: n, visual: visualForEntry(key, normalizeEntry(val)) });
+            for (const raw of [key, ...(normalizeEntry(val).aliases || [])]) {
+                for (const n of nameVariants(raw)) {
+                    known.add(n.toLowerCase());
+                    for (const w of n.toLowerCase().split(/[\s_-]+/)) if (w) known.add(w);
+                }
+            }
         }
     }
-    names.sort((a, b) => b.name.length - a.name.length);
-    for (const { name, visual } of names) {
-        const re = new RegExp(`(?<![A-Za-z0-9-])${escapeRegExp(name)}(?![A-Za-z0-9-])`, 'gi');
-        out = out.replace(re, visual);
+    for (const w of String(scene?.location || '').toLowerCase().split(/[^a-z0-9]+/)) if (w) known.add(w);
+
+    const found = [];
+    const seen = new Set();
+    const tokens = text.split(/\s+/);
+    let sentenceStart = true;
+    let run = [];
+    const flushRun = () => {
+        if (!run.length) { return; }
+        const phrase = run.join(' ');
+        const lower = phrase.toLowerCase();
+        const allKnown = run.every((w) => known.has(w.toLowerCase()));
+        if (!known.has(lower) && !allKnown && !seen.has(lower)) {
+            seen.add(lower);
+            found.push(phrase);
+        }
+        run = [];
+    };
+    for (const rawTok of tokens) {
+        const leading = /^["'“‘(\[]+/.test(rawTok);
+        const word = rawTok.replace(/^["'“‘(\[]+|["'”’)\],;:!?.]+$/g, '');
+        const endsSentence = /[.!?]["'”’)]*$/.test(rawTok);
+        const isCap = /^[A-Z][a-zA-Z'’-]{2,}$/.test(word) && !/^[A-Z]+$/.test(word);
+        if (isCap && !sentenceStart && !PROPER_NOUN_STOP.has(word.toLowerCase())) {
+            run.push(word);
+        } else {
+            flushRun();
+        }
+        sentenceStart = endsSentence || (leading && sentenceStart);
+        if (!word) sentenceStart = true;
     }
-    return out;
+    flushRun();
+    return found;
 };
 
-const findBucketKey = (bucket, name) => {
+export const findBucketKey = (bucket, name) => {
     const n = normalizeKey(name);
     if (!n) return null;
     const nLower = n.toLowerCase();

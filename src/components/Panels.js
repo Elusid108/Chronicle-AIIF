@@ -1,5 +1,5 @@
 import { html } from '../html.js';
-import { BookOpen, FileText, X, Clock, Image as ImageIcon, Activity, Server, Mic, CheckCircle, CornerDownRight, Book, User as UserIcon, MapPin, Box, RefreshCw } from 'lucide-react';
+import { BookOpen, FileText, X, Clock, Image as ImageIcon, Activity, Server, Mic, CheckCircle, CornerDownRight, Book, User as UserIcon, MapPin, Box, RefreshCw, Pin, PinOff } from 'lucide-react';
 import { summaryToText } from '../utils/storage.js';
 import { Button } from './ui.js';
 
@@ -74,6 +74,7 @@ export function SidePanel({ app }) {
                                                         <span className="truncate">${name}</span>
                                                     </span>
                                                     <span className="flex items-center gap-1 shrink-0">
+                                                        ${data && data.pinned && html`<${Pin} size=${9} className="text-blue-400" title="Pinned: always in the GM's context" />`}
                                                         ${data && data.source === 'player' && html`<span className="text-[8px] text-amber-400 uppercase">you</span>`}
                                                         <${CornerDownRight} size=${10} className="opacity-0 group-hover:opacity-100 text-blue-500" />
                                                     </span>
@@ -153,7 +154,7 @@ function CodexPortraitFrame({ src, alt, onOpen }) {
 }
 
 export function CodexEntryModal({ app }) {
-    const { selectedCodexEntry, setSelectedCodexEntry, setCurrentSlideIndex, togglePanel, mergeSelectedInto, regenerateCodexPortrait, codex, openLightbox } = app;
+    const { selectedCodexEntry, setSelectedCodexEntry, setCurrentSlideIndex, togglePanel, mergeSelectedInto, regenerateCodexPortrait, saveCodexEdits, codex, openLightbox } = app;
     if (!selectedCodexEntry) return null;
     const { category, title, data } = selectedCodexEntry;
     const live = codex?.[category]?.[title];
@@ -192,8 +193,11 @@ export function CodexEntryModal({ app }) {
                         <${Button} variant="secondary" onClick=${() => regenerateCodexPortrait(category, title)} className="flex-1 text-xs">
                             <${RefreshCw} size=${12} /> Regenerate portrait
                         <//>
-                        <span className="text-[9px] text-gray-600 self-center">${entry.source === 'player' ? 'Player-authored' : 'Model'}</span>
+                        <${Button} variant=${entry.pinned ? 'primary' : 'secondary'} onClick=${() => saveCodexEdits(category, title, { pinned: !entry.pinned })} className="text-xs" title=${entry.pinned ? 'Unpin: let relevance decide when the GM sees this' : 'Pin: always include this entry in the GM\'s context'}>
+                            ${entry.pinned ? html`<${PinOff} size=${12} /> Unpin` : html`<${Pin} size=${12} /> Pin`}
+                        <//>
                     </div>
+                    <div className="text-[9px] text-gray-600">${entry.source === 'player' ? 'Player-authored' : 'Model-authored'}${entry.pinned ? ' · pinned' : ''}</div>
                     ${others.length > 0 && html`
                         <div>
                             <label className="text-[10px] uppercase text-gray-500 font-bold block mb-1">Merge into</label>

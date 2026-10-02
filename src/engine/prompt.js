@@ -34,6 +34,7 @@ export const TURN_SCHEMA = {
                 goal: { type: 'string' },
                 open_threads: { type: 'array', items: { type: 'string' }, maxItems: 6 },
             },
+            required: ['location', 'present_characters', 'open_threads'],
         },
         state_updates: {
             type: 'array',
@@ -89,6 +90,7 @@ const pacingTask = (pacing) => {
 
 export const buildSystemPrompt = ({
     config, initialContext, summary, codex, history, statsEnabled, stats, scene, styleCard, pacing,
+    currentAction = '', recallText = '',
 }) => {
     const genre = genreText(config);
     const style = styleText(config);
@@ -101,11 +103,16 @@ export const buildSystemPrompt = ({
         }
         return '';
     })();
-    const recentBeatsText = norm.beats.slice(-14).join('\n') || '(none yet)';
-    const recentText = `${recentBeatsText}\n${lastAction}\n${currentScene.location || ''}\n${(currentScene.present_characters || []).join(' ')}`;
-    const { codex: relevantCodex, omitted } = selectRelevantCodex(codex, recentText, currentScene, 24);
+    // Every unfolded beat is shown: anything older lives in longTerm after compaction.
+    const recentBeatsText = norm.beats.join('\n') || '(none yet)';
     const proseCount = styleCard ? 1 : 2;
     const recent = recentNarratives(history, proseCount);
+    const lastProse = recent.length ? recent[recent.length - 1] : '';
+    const recentText = [
+        recentBeatsText, currentAction || '', lastAction, lastProse,
+        currentScene.location || '', (currentScene.present_characters || []).join(' '),
+    ].join('\n');
+    const { codex: relevantCodex, omitted } = selectRelevantCodex(codex, recentText, currentScene, 24);
 
     const sections = [
         `ROLE: AI Game Master & Loremaster.`,
@@ -126,6 +133,7 @@ export const buildSystemPrompt = ({
     sections.push(`CURRENT SCENE (authoritative; keep this consistent unless the action changes it):\n${JSON.stringify(currentScene)}`);
 
     if (norm.longTerm) sections.push(`STORY SO FAR (compressed history):\n${norm.longTerm}`);
+    if (recallText) sections.push(`RECALLED EARLIER EVENTS (older pages retrieved because they may matter for this action; use only if relevant):\n${recallText}`);
     sections.push(`RECENT EVENTS (running log):\n${recentBeatsText}`);
 
     if (recent.length) {
@@ -148,8 +156,8 @@ export const buildSystemPrompt = ({
     }
 
     const extra = [
-        `6. SCENE: Fill scene with short literal values only: location (place name), time_of_day (e.g. "Midnight, rainy"), present_characters, a one-line goal, and up to 6 open_threads. Never self-correct, never write "let's clean up", never dump clocks/metrics/indexes, never repeat a phrase.`,
-        `7. CODEX FIELDS: For each update you may set visual (one-line appearance for the painter), aliases, status, and location. Use category "character", "place", or "item".`,
+        `6. SCENE: Fill scene with short literal values only: location (place name), time_of_day (e.g. "Midnight, rainy"), present_characters, a one-line goal, and up to 6 open_threads. present_characters must be the COMPLETE list of who is with the player right now (not the player); return [] if the player is alone. open_threads must be the complete current list; drop resolved threads. Never self-correct, never write "let's clean up", never dump clocks/metrics/indexes, never repeat a phrase.`,
+        `7. CODEX FIELDS: For each update you may set visual (one-line appearance for the painter), aliases, status, and location. Use category "character", "place", or "item". Reuse the exact existing key for known entities. To clear a stale status or location, set it to "none".`,
     ];
     if (statsEnabled) extra.push(`8. STATE: When the player's tracked stats change (health, resources, etc.), reflect it in state_updates as key/value pairs.`);
 

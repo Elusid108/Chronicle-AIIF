@@ -120,6 +120,13 @@ export function SettingsPanel({ app }) {
                             </div>
                             <${Toggle} on=${!!prefs.consistencyCheck} onClick=${() => setPrefs({ ...prefs, consistencyCheck: !prefs.consistencyCheck })} />
                         </div>
+                        <div className="flex justify-between items-center">
+                            <div>
+                                <div className="text-xs text-gray-300">Lore backfill</div>
+                                <div className="text-[9px] text-gray-600">Second pass for codex entries the GM skipped (runs only when something looks missing)</div>
+                            </div>
+                            <${Toggle} on=${prefs.loreBackfill !== false} onClick=${() => setPrefs({ ...prefs, loreBackfill: prefs.loreBackfill === false })} />
+                        </div>
                         <div>
                             <div className="flex justify-between items-center mb-1">
                                 <div>

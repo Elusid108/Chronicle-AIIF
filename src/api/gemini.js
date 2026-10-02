@@ -65,7 +65,17 @@ export class GeminiHttpError extends Error {
     }
 }
 
+export class GeminiBlockedError extends Error {
+    constructor(reason) {
+        super(`Request blocked by the safety filter (${reason || 'unspecified'})`);
+        this.name = 'GeminiBlockedError';
+        this.reason = reason || '';
+    }
+}
+
 export const isAbortError = (e) => e?.name === 'AbortError';
+
+const abortError = () => new DOMException('Aborted', 'AbortError');
 
 const authHeaders = (apiKey, json = true) => {
     const headers = { 'x-goog-api-key': apiKey };
@@ -73,19 +83,34 @@ const authHeaders = (apiKey, json = true) => {
     return headers;
 };
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+// Abort-aware sleep: rejects with AbortError as soon as the signal fires.
+export const sleep = (ms, signal) => new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(abortError()); return; }
+    let timer = null;
+    const onAbort = () => { clearTimeout(timer); reject(abortError()); };
+    timer = setTimeout(() => {
+        signal?.removeEventListener('abort', onAbort);
+        resolve();
+    }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
+});
 
 const backoffMs = (attempt) => Math.min(500 * (2 ** attempt) + Math.random() * 250, 8000);
 
-const fetchGemini = async (url, init, { retries = 3 } = {}) => {
+const RETRYABLE_STATUS = new Set([429, 503]);
+
+// Retries 429/503 and network errors with backoff. The FINAL rate-limited
+// response is returned (not thrown) so callers can inspect response.status
+// and switch to a backup engine.
+export const fetchGemini = async (url, init, { retries = 3 } = {}) => {
     let lastErr;
+    const signal = init?.signal;
     for (let i = 0; i <= retries; i++) {
         try {
             const response = await fetch(url, init);
-            if (response.status === 429) {
-                lastErr = new GeminiHttpError(429, 'Status 429');
-                if (i === retries) throw lastErr;
-                await sleep(backoffMs(i));
+            if (RETRYABLE_STATUS.has(response.status)) {
+                if (i === retries) return response;
+                await sleep(backoffMs(i), signal);
                 continue;
             }
             return response;
@@ -94,7 +119,7 @@ const fetchGemini = async (url, init, { retries = 3 } = {}) => {
             if (e instanceof GeminiHttpError) throw e;
             lastErr = e;
             if (i === retries) throw e;
-            await sleep(backoffMs(i));
+            await sleep(backoffMs(i), signal);
         }
     }
     throw lastErr || new Error('Request failed');
@@ -111,18 +136,45 @@ const throwIfBad = async (response) => {
     throw new GeminiHttpError(response.status, detail);
 };
 
-const SCHEMA_STRIP_KEYS = new Set(['maxLength', 'minLength', 'minimum', 'maximum', 'pattern', 'propertyOrdering']);
-const schemaRejectedModels = new Set();
+const SCHEMA_STRIP_KEYS = new Set(['maxLength', 'minLength', 'minimum', 'maximum', 'pattern']);
+// Per-model schema support level: 0 = full schema (with propertyOrdering),
+// 1 = schema without propertyOrdering, 2 = no responseSchema at all.
+const schemaLevel = new Map();
+const SCHEMA_400_RE = /schema|propertyOrdering|property_ordering|response_schema|responseSchema|Unknown name|Invalid JSON payload/i;
 
-export const sanitizeApiSchema = (node) => {
-    if (Array.isArray(node)) return node.map(sanitizeApiSchema);
-    if (!node || typeof node !== 'object') return node;
-    const out = {};
-    for (const [key, value] of Object.entries(node)) {
-        if (SCHEMA_STRIP_KEYS.has(key)) continue;
-        out[key] = sanitizeApiSchema(value);
+export const sanitizeApiSchema = (node, opts = {}) => {
+    const stripOrdering = Boolean(opts.stripOrdering);
+    const walk = (n) => {
+        if (Array.isArray(n)) return n.map(walk);
+        if (!n || typeof n !== 'object') return n;
+        const out = {};
+        for (const [key, value] of Object.entries(n)) {
+            if (SCHEMA_STRIP_KEYS.has(key)) continue;
+            if (stripOrdering && key === 'propertyOrdering') continue;
+            out[key] = walk(value);
+        }
+        return out;
+    };
+    return walk(node);
+};
+
+const BLOCKING_FINISH = new Set(['SAFETY', 'RECITATION', 'PROHIBITED_CONTENT', 'BLOCKLIST', 'SPII']);
+
+export const readFinishReason = (payload) => {
+    const blockReason = payload?.promptFeedback?.blockReason || '';
+    const finishReason = payload?.candidates?.[0]?.finishReason || '';
+    return { blockReason, finishReason };
+};
+
+// Throws GeminiBlockedError when the prompt itself was refused; a refused
+// prompt will be refused by every model, so callers must not fail over.
+const assertNotBlocked = (payload) => {
+    const { blockReason, finishReason } = readFinishReason(payload);
+    if (blockReason) throw new GeminiBlockedError(blockReason);
+    if (BLOCKING_FINISH.has(finishReason) && !extractCandidateText(payload)) {
+        throw new GeminiBlockedError(finishReason);
     }
-    return out;
+    return finishReason;
 };
 
 export const extractCandidateText = (payload) => {
@@ -223,9 +275,9 @@ const repairTruncatedJson = (s) => {
     return out;
 };
 
-const buildTextPayload = (prompt, systemInstruction, schema) => {
+const buildTextPayload = (prompt, systemInstruction, schema, { stripOrdering = false } = {}) => {
     const generationConfig = { temperature: 0.85, maxOutputTokens: 8192, responseMimeType: 'application/json' };
-    if (schema) generationConfig.responseSchema = sanitizeApiSchema(schema);
+    if (schema) generationConfig.responseSchema = sanitizeApiSchema(schema, { stripOrdering });
     return {
         contents: [{ parts: [{ text: prompt }] }],
         systemInstruction: { parts: [{ text: systemInstruction }] },
@@ -249,6 +301,7 @@ const streamGenerate = async (apiKey, model, payload, { onPartialText, onPartial
     let sseBuffer = '';
     let fullText = '';
     let runaway = false;
+    let finishReason = '';
 
     const flushEvent = (chunk) => {
         const lines = chunk.split(/\r?\n/);
@@ -257,8 +310,12 @@ const streamGenerate = async (apiKey, model, payload, { onPartialText, onPartial
             if (!trimmed.startsWith('data:')) continue;
             const jsonStr = trimmed.slice(5).trim();
             if (!jsonStr || jsonStr === '[DONE]') continue;
+            let obj;
+            try { obj = JSON.parse(jsonStr); } catch { continue; /* partial SSE frame */ }
+            if (obj?.promptFeedback?.blockReason) throw new GeminiBlockedError(obj.promptFeedback.blockReason);
+            const fr = obj?.candidates?.[0]?.finishReason;
+            if (fr) finishReason = fr;
             try {
-                const obj = JSON.parse(jsonStr);
                 const part = extractCandidateText(obj);
                 if (part) {
                     fullText += part;
@@ -269,7 +326,10 @@ const streamGenerate = async (apiKey, model, payload, { onPartialText, onPartial
                     if (onPartialBuffer) onPartialBuffer(fullText);
                     if (hasRunawayRepetition(fullText)) runaway = true;
                 }
-            } catch { /* partial SSE frame */ }
+            } catch (e) {
+                if (e instanceof GeminiBlockedError) throw e;
+                /* malformed part */
+            }
         }
     };
 
@@ -285,8 +345,10 @@ const streamGenerate = async (apiKey, model, payload, { onPartialText, onPartial
         sseBuffer = events.pop() || '';
         for (const ev of events) flushEvent(ev);
     }
+    sseBuffer += decoder.decode();
     if (!runaway && sseBuffer.trim()) flushEvent(sseBuffer);
-    return fullText;
+    if (!fullText && BLOCKING_FINISH.has(finishReason)) throw new GeminiBlockedError(finishReason);
+    return { fullText, finishReason };
 };
 
 const salvageTurnData = (fullText, parsed) => {
@@ -323,8 +385,10 @@ const generateContentOnce = async (apiKey, model, payload, signal) => {
     });
     await throwIfBad(response);
     const result = await response.json();
+    const finishReason = assertNotBlocked(result);
     const text = extractCandidateText(result);
     if (!text) throw new Error('Empty model response');
+    if (finishReason === 'MAX_TOKENS') verboseEvent('gemini.text.truncated', { model, finishReason });
     return text;
 };
 
@@ -334,7 +398,6 @@ export const callGemini = async (deps, prompt, systemInstruction = '', opts = {}
     const requiresNarrative = !schema || Boolean(schema.properties?.narrative);
     const attempts = [];
     let data = null;
-    let schemaDropped = false;
 
     const modelsToTry = collectTextModels(modelPrefs, availableTextModels);
     verboseEvent('gemini.text.start', {
@@ -347,16 +410,20 @@ export const callGemini = async (deps, prompt, systemInstruction = '', opts = {}
 
     for (let mi = 0; mi < modelsToTry.length; mi++) {
         const model = modelsToTry[mi];
-        const useSchema = Boolean(schema) && !schemaRejectedModels.has(model);
+        const level = schema ? (schemaLevel.get(model) || 0) : 2;
+        const useSchema = Boolean(schema) && level < 2;
+        const schemaDropped = Boolean(schema) && level >= 2;
         const start = performance.now();
         let fullText = '';
         let usedSalvage = false;
         try {
             setStatus && setStatus(requiresNarrative ? `Narrative: ${model}...` : `Lore: ${model}...`);
-            const payload = buildTextPayload(prompt, systemInstruction, useSchema ? schema : null);
+            const payload = buildTextPayload(prompt, systemInstruction, useSchema ? schema : null, { stripOrdering: level >= 1 });
 
             if (stream) {
-                fullText = await streamGenerate(apiKey, model, payload, { onPartialText, onPartialBuffer, signal });
+                const streamed = await streamGenerate(apiKey, model, payload, { onPartialText, onPartialBuffer, signal });
+                fullText = streamed.fullText;
+                if (streamed.finishReason === 'MAX_TOKENS') verboseEvent('gemini.text.truncated', { model, finishReason: 'MAX_TOKENS' });
                 if (!String(fullText || '').trim()) {
                     fullText = await generateContentOnce(apiKey, model, payload, signal);
                 }
@@ -384,6 +451,7 @@ export const callGemini = async (deps, prompt, systemInstruction = '', opts = {}
             break;
         } catch (e) {
             if (isAbortError(e)) throw e;
+            if (e instanceof GeminiBlockedError) throw e;
             if (e instanceof GeminiHttpError && (e.status === 401 || e.status === 403)) {
                 throw new Error('API key rejected (401/403)');
             }
@@ -399,20 +467,18 @@ export const callGemini = async (deps, prompt, systemInstruction = '', opts = {}
                     break;
                 }
             }
-            if (e instanceof GeminiHttpError && e.status === 400 && useSchema) {
-                schemaRejectedModels.add(model);
-                schemaDropped = true;
+            if (e instanceof GeminiHttpError && e.status === 400 && useSchema && SCHEMA_400_RE.test(e.message)) {
+                // Tiered fallback: first drop propertyOrdering, then the whole schema.
+                schemaLevel.set(model, level + 1);
                 mi -= 1;
-                verboseEvent('gemini.text.schemaDropped', { model, error: e.message });
-                console.warn(`Model ${model} rejected the schema. Retrying without responseSchema...`, e.message);
+                verboseEvent('gemini.text.schemaDowngrade', { model, level: level + 1, error: e.message });
+                console.warn(`Model ${model} rejected the schema (level ${level}). Retrying at level ${level + 1}...`, e.message);
                 continue;
             }
             data = null;
             const duration = (performance.now() - start) / 1000;
             attempts.push({ model, status: 'failed', duration, error: e.message });
             verboseEvent('gemini.text.attempt', { model, status: 'failed', duration, error: e.message, rawText: fullText });
-            const canFailover = !(e instanceof GeminiHttpError && (e.status === 401 || e.status === 403));
-            if (!canFailover) throw e;
             if (requiresNarrative && onPartialText) onPartialText('');
             console.warn(`Model ${model} failed. Trying next...`, e.message);
         }
@@ -447,13 +513,16 @@ export const callGeminiText = async (deps, prompt, systemInstruction = '', opts 
             });
             await throwIfBad(response);
             const result = await response.json();
+            const finishReason = assertNotBlocked(result);
             const text = extractCandidateText(result);
             if (text) {
-                verboseEvent('gemini.freetext.result', { model, text: text.trim() });
+                verboseEvent('gemini.freetext.result', { model, text: text.trim(), finishReason });
                 return text.trim();
             }
+            verboseEvent('gemini.freetext.attempt', { model, status: 'empty', finishReason });
         } catch (e) {
             if (isAbortError(e)) throw e;
+            if (e instanceof GeminiBlockedError) throw e;
             if (e instanceof GeminiHttpError && (e.status === 401 || e.status === 403)) {
                 throw new Error('API key rejected (401/403)');
             }
@@ -463,6 +532,59 @@ export const callGeminiText = async (deps, prompt, systemInstruction = '', opts 
     }
     verboseEvent('gemini.freetext.failed', {});
     throw new Error('Text generation failed');
+};
+
+const EMBED_MODEL = 'gemini-embedding-001';
+const EMBED_DIMS = 768;
+const EMBED_BATCH = 50;
+
+const l2Normalize = (values) => {
+    const vec = Float32Array.from(values);
+    let norm = 0;
+    for (let i = 0; i < vec.length; i++) norm += vec[i] * vec[i];
+    norm = Math.sqrt(norm) || 1;
+    for (let i = 0; i < vec.length; i++) vec[i] /= norm;
+    return vec;
+};
+
+/**
+ * Embed texts with gemini-embedding-001 (768 dims, L2-normalized so dot
+ * product == cosine). taskType: RETRIEVAL_DOCUMENT | RETRIEVAL_QUERY.
+ * Throws GeminiHttpError on non-OK responses; never walks other models.
+ */
+export const embedText = async (deps, texts, opts = {}) => {
+    const { apiKey, modelPrefs } = deps;
+    const { taskType = 'RETRIEVAL_DOCUMENT', signal } = opts;
+    const model = (modelPrefs && modelPrefs.embedModel) || EMBED_MODEL;
+    const list = (Array.isArray(texts) ? texts : [texts]).map((t) => String(t || '').slice(0, 8000));
+    const out = [];
+    for (let i = 0; i < list.length; i += EMBED_BATCH) {
+        const chunk = list.slice(i, i + EMBED_BATCH);
+        const payload = {
+            requests: chunk.map((text) => ({
+                model: `models/${model}`,
+                content: { parts: [{ text }] },
+                taskType,
+                outputDimensionality: EMBED_DIMS,
+            })),
+        };
+        const response = await fetchGemini(`${API_BASE}/models/${model}:batchEmbedContents`, {
+            method: 'POST',
+            headers: authHeaders(apiKey),
+            body: JSON.stringify(payload),
+            signal,
+        }, { retries: 1 });
+        await throwIfBad(response);
+        const data = await response.json();
+        const rows = Array.isArray(data?.embeddings) ? data.embeddings : [];
+        if (rows.length !== chunk.length) throw new Error('Embedding response size mismatch');
+        for (const row of rows) {
+            if (!Array.isArray(row?.values) || !row.values.length) throw new Error('Embedding response missing values');
+            out.push(l2Normalize(row.values));
+        }
+    }
+    verboseEvent('gemini.embed.result', { model, count: out.length, taskType, dims: out[0]?.length || 0 });
+    return out;
 };
 
 /**
@@ -499,82 +621,101 @@ export const generateImage = async (deps, imagePrompt, opts = {}) => {
         { inlineData: { mimeType: ref.mime || 'image/webp', data: ref.data } },
     ]));
 
-    const tryPollinations = async () => {
+    const tryPollinations = async ({ timeoutMs = 45000 } = {}) => {
+        if (signal?.aborted) throw abortError();
         const start = performance.now();
         const encodedPrompt = encodeURIComponent(textOnlyPrompt);
         const pollUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=576&nologo=true`;
         await new Promise((resolve, reject) => {
             const img = new Image();
-            img.onload = resolve;
-            img.onerror = () => reject(new Error('Pollinations fetch failed'));
+            let settled = false;
+            const finish = (fn, arg) => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timer);
+                signal?.removeEventListener('abort', onAbort);
+                fn(arg);
+            };
+            const onAbort = () => { img.src = ''; finish(reject, abortError()); };
+            const timer = setTimeout(() => { img.src = ''; finish(reject, new Error('Pollinations timed out')); }, timeoutMs);
+            signal?.addEventListener('abort', onAbort, { once: true });
+            img.onload = () => finish(resolve);
+            img.onerror = () => finish(reject, new Error('Pollinations fetch failed'));
             img.src = pollUrl;
         });
         attempts.push({ model: 'pollinations.ai', status: 'success', duration: (performance.now() - start) / 1000 });
         return pollUrl;
     };
 
+    const switchToBackup = () => {
+        if (mediaStatus.images === 'backup') return;
+        setMediaStatus && setMediaStatus((prev) => (prev.images === 'backup' ? prev : { ...prev, images: 'backup' }));
+        deps.notify && deps.notify('info', 'Gemini image quota reached. Using the Pollinations fallback (prompts are sent to pollinations.ai).');
+    };
+
     if (mediaStatus.images === 'backup') {
         try {
             return done(await tryPollinations());
         } catch (e) {
+            if (isAbortError(e)) throw e;
             attempts.push({ model: 'pollinations.ai', status: 'failed', duration: 0, error: e.message });
             return done(null);
         }
     }
 
+    // Returns { url } on success, { rateLimited: true } when the quota is
+    // exhausted (stop walking models), or null when this model failed.
     const tryImageModel = async (modelId) => {
         const start = performance.now();
         const isImagen = modelId.includes('imagen');
         setStatus && setStatus(`Visuals: ${modelId}...`);
         try {
+            let response;
             if (isImagen) {
                 const url = `${API_BASE}/models/${modelId}:predict`;
                 const payload = { instances: [{ prompt: textOnlyPrompt }], parameters: { sampleCount: 1, aspectRatio: '16:9' } };
-                const response = await fetchGemini(url, {
+                response = await fetchGemini(url, {
                     method: 'POST',
                     headers: authHeaders(apiKey),
                     body: JSON.stringify(payload),
                     signal,
-                }, { retries: 2 });
-                if (response.status === 429 || response.status === 403) {
-                    setMediaStatus && setMediaStatus((prev) => ({ ...prev, images: 'backup' }));
-                    throw new GeminiHttpError(response.status, 'Quota/Permission Limit');
-                }
-                await throwIfBad(response);
-                const data = await response.json();
-                if (data.predictions?.[0]?.bytesBase64Encoded) {
-                    attempts.push({ model: modelId, status: 'success', duration: (performance.now() - start) / 1000 });
-                    return `data:image/png;base64,${data.predictions[0].bytesBase64Encoded}`;
-                }
-                throw new Error('No image data in response');
+                }, { retries: 1 });
+            } else {
+                const url = `${API_BASE}/models/${modelId}:generateContent`;
+                const payload = {
+                    contents: [{ parts: [...refParts, { text: fullPrompt }] }],
+                    generationConfig: { responseModalities: ['IMAGE'] },
+                };
+                response = await fetchGemini(url, {
+                    method: 'POST',
+                    headers: authHeaders(apiKey),
+                    body: JSON.stringify(payload),
+                    signal,
+                }, { retries: 1 });
             }
-            const url = `${API_BASE}/models/${modelId}:generateContent`;
-            const payload = {
-                contents: [{ parts: [...refParts, { text: fullPrompt }] }],
-                generationConfig: { responseModalities: ['IMAGE'] },
-            };
-            const response = await fetchGemini(url, {
-                method: 'POST',
-                headers: authHeaders(apiKey),
-                body: JSON.stringify(payload),
-                signal,
-            }, { retries: 2 });
-            if (response.status === 429 || response.status === 403) {
-                setMediaStatus && setMediaStatus((prev) => ({ ...prev, images: 'backup' }));
-                throw new GeminiHttpError(response.status, 'Quota/Permission Limit');
+            if (response.status === 429) {
+                attempts.push({ model: modelId, status: 'failed', duration: (performance.now() - start) / 1000, error: 'Rate limited (429)' });
+                return { rateLimited: true };
             }
             await throwIfBad(response);
             const data = await response.json();
+            if (isImagen) {
+                if (data.predictions?.[0]?.bytesBase64Encoded) {
+                    attempts.push({ model: modelId, status: 'success', duration: (performance.now() - start) / 1000 });
+                    return { url: `data:image/png;base64,${data.predictions[0].bytesBase64Encoded}` };
+                }
+                throw new Error('No image data in response');
+            }
             const part = data.candidates?.[0]?.content?.parts?.find((p) => p.inlineData);
             if (part) {
                 attempts.push({ model: modelId, status: 'success', duration: (performance.now() - start) / 1000 });
-                return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+                return { url: `data:${part.inlineData.mimeType};base64,${part.inlineData.data}` };
             }
             throw new Error('No image data in response');
         } catch (e) {
             if (isAbortError(e)) throw e;
             attempts.push({ model: modelId, status: 'failed', duration: (performance.now() - start) / 1000, error: e.message });
-            console.warn(`Image model ${modelId} failed:`, e);
+            console.warn(`Image model ${modelId} failed:`, e.message);
             return null;
         }
     };
@@ -588,12 +729,14 @@ export const generateImage = async (deps, imagePrompt, opts = {}) => {
 
     for (const modelId of imageModelsToTry) {
         const result = await tryImageModel(modelId);
-        if (result) return done(result);
+        if (result?.url) return done(result.url);
+        if (result?.rateLimited) { switchToBackup(); break; }
     }
 
     try {
         return done(await tryPollinations());
     } catch (e3) {
+        if (isAbortError(e3)) throw e3;
         attempts.push({ model: 'pollinations.ai', status: 'failed', duration: 0, error: e3.message });
     }
     return done(null);
@@ -629,7 +772,7 @@ export const generateSpeech = async (deps, text, voiceOverride = null, opts = {}
             signal,
         }, { retries: 2 });
         if (!response.ok) {
-            if (response.status === 429 || response.status === 403) {
+            if (response.status === 429) {
                 if (!voiceOverride) setMediaStatus && setMediaStatus((prev) => ({ ...prev, audio: 'backup' }));
             }
             throw new GeminiHttpError(response.status, `Status ${response.status}`);
@@ -701,7 +844,7 @@ export const validateApiKey = async (key) => {
         if (getResponse.status === 401 || getResponse.status === 403) return { ok: false, detail: 'invalid_key' };
         if (getResponse.status === 429) return { ok: false, detail: 'rate_limit' };
 
-        const postResponse = await fetchGemini(`${API_BASE}/models/gemini-2.0-flash:generateContent`, {
+        const postResponse = await fetchGemini(`${API_BASE}/models/gemini-flash-latest:generateContent`, {
             method: 'POST',
             headers: authHeaders(cleanKey),
             body: JSON.stringify({ contents: [{ parts: [{ text: 'Hello' }] }], generationConfig: { maxOutputTokens: 1 } }),

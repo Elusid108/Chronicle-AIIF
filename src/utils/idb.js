@@ -88,6 +88,22 @@ export const deleteTurnImage = async (saveId, turnIndex) => {
     await idbDelete('images', imageKey(saveId, turnIndex));
 };
 
+// Drop stored page images at index >= fromIndex (rewind / regenerate).
+export const deleteTurnImagesFrom = async (saveId, fromIndex) => {
+    if (!saveId) return;
+    const keys = await idbKeys('images');
+    const drop = keys.filter((k) => {
+        const index = parseTurnIndex(saveId, k);
+        return index != null && index >= fromIndex;
+    });
+    if (!drop.length) return;
+    const db = await openDb();
+    const tx = db.transaction('images', 'readwrite');
+    const store = tx.objectStore('images');
+    for (const key of drop) store.delete(key);
+    await txDone(tx);
+};
+
 export const deleteImagesForSave = async (saveId) => {
     const keys = await idbKeys('images');
     const prefix = `${saveId}:`;
