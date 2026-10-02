@@ -3,7 +3,7 @@ import {
     INITIAL_SUMMARY, POSSESSION_VALUES, SCENE_FIELD_LIMITS,
 } from '../constants.js';
 import {
-    LEGACY_ACTIVE_ID, deleteCodexImagesForSave, deleteImagesForSave,
+    LEGACY_ACTIVE_ID, deleteCodexImagesForSave, deleteImagesForSave, deleteRecallForSlot,
     getCodexImage, getTurnImage, idbDelete, idbGet, idbPut, renameKeyPrefix,
 } from './idb.js';
 import { revokeIfBlobUrl } from './images.js';
@@ -480,6 +480,7 @@ export const deleteSlot = async (id) => {
     try { await idbDelete('saves', id); } catch { /* ignore */ }
     try { await deleteImagesForSave(id); } catch { /* ignore */ }
     try { await deleteCodexImagesForSave(id); } catch { /* ignore */ }
+    try { await deleteRecallForSlot(id); } catch { /* ignore */ }
     const current = await getCurrentSlotId();
     if (current === id) await setCurrentSlotId(null);
     const next = (await listSlots()).filter((s) => s.id !== id);

@@ -19,8 +19,9 @@ import {
     generateEntryPortrait, lastAiIndex, processTurn, rebuildBase, sceneJobKey,
     startAssetSignal,
 } from './engine/session.js';
+import { ensureRecallIndex, getRecallState, indexTurn, retrieveRecall } from './engine/recall.js';
 import { revokeHistoryImages, revokeIfBlobUrl } from './utils/images.js';
-import { copyCodexImageKey, deleteCodexImage, deleteTurnImagesFrom, getCodexImage, pruneTurnImages } from './utils/idb.js';
+import { copyCodexImageKey, deleteCodexImage, deleteRecallFrom, deleteTurnImagesFrom, getCodexImage, pruneTurnImages } from './utils/idb.js';
 import { escapeHtml, safeImageSrc } from './utils/text.js';
 import { downloadVerboseLog, setVerboseEnabled } from './utils/verboseLog.js';
 import { ApiKeyModal } from './components/ApiKeyModal.js';
@@ -474,7 +475,23 @@ export function App() {
         setGeneratingAssets, setTurnsRemaining, setIsFinished, setIsEnding, setExportDetails, setUserInput,
         setSelectedCodexEntry,
         textDeps, imageDeps, speechDeps,
+        retrieveRecall: recallForTurn,
+        indexRecall: indexTurnForRecall,
     });
+
+    // Per-story recall hooks used by processTurn.
+    const recallForTurn = async ({ query, history: baseHistory, scene: baseScene, signal }) => {
+        const live = snapshotRef.current;
+        if (!live.currentSlotId || live.prefs?.storyRecall === false) return null;
+        if ((baseHistory || []).filter((t) => t.type === 'ai').length < 4) return null;
+        const fullQuery = [query, baseScene?.location, baseScene?.goal].filter(Boolean).join('\n');
+        return retrieveRecall({ slotId: live.currentSlotId, history: baseHistory, query: fullQuery, deps: textDeps(), signal });
+    };
+    const indexTurnForRecall = ({ turnIndex, turn, signal }) => {
+        const live = snapshotRef.current;
+        if (!live.currentSlotId || live.prefs?.storyRecall === false) return Promise.resolve();
+        return indexTurn({ slotId: live.currentSlotId, turnIndex, turn, deps: textDeps(), signal });
+    };
 
     const runTurn = (promptType, inputVal, base) => processTurn(turnIo(), promptType, inputVal, base);
 
@@ -616,7 +633,10 @@ export function App() {
             turnsRemaining: remainingNext,
         };
         const slotId = snapshotRef.current.currentSlotId;
-        if (slotId) deleteTurnImagesFrom(slotId, b.history.length).catch(() => {});
+        if (slotId) {
+            deleteTurnImagesFrom(slotId, b.history.length).catch(() => {});
+            deleteRecallFrom(slotId, b.history.length).catch(() => {});
+        }
     };
 
     const rewindTurn = () => {
@@ -839,6 +859,11 @@ export function App() {
         setView('game'); setActivePanel(null);
         // Missing page images are NOT regenerated on load (each is a paid image
         // call); the "Retry image" button on a page regenerates it on demand.
+        if (snapshotRef.current.prefs?.storyRecall !== false) {
+            const signal = startAssetSignal(assetAbortMap, 'bg:recall-index');
+            ensureRecallIndex({ slotId, history: withImages.history, deps: textDeps(), signal })
+                .catch((e) => { if (e?.name !== 'AbortError') console.warn('Chronicle: recall index failed', e); });
+        }
     };
 
     const resumeLatestStory = async () => {
@@ -987,6 +1012,7 @@ export function App() {
         saveCodexEdits, mergeSelectedInto, regenerateCodexPortrait,
         isStreaming, streamingText, editingAction, setEditingActionText, beginEditAction, cancelEditAction, submitEditAction,
         rewindTurn, regenerateTurn, goHome, toast, dismissToast, contextChars,
+        recallStatus: getRecallState(),
         retryTurnImage, retryOpening, ensureCodexPortrait, downloadVerboseLog,
         textScrollRef, onTouchStart, onTouchMove, onTouchEnd, prevSlide, nextSlide,
     };

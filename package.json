@@ -1,0 +1,12 @@
+{
+  "name": "chronicle-aiif",
+  "version": "3.3.0",
+  "private": true,
+  "type": "module",
+  "description": "Chronicle: serverless AI interactive fiction engine. No build step; this file only exists for `npm test`.",
+  "scripts": {
+    "test": "node --test \"test/**/*.test.mjs\"",
+    "check": "for f in $(find src -name '*.js'); do node --check \"$f\" || exit 1; done && echo syntax ok"
+  },
+  "license": "Apache-2.0"
+}

@@ -159,7 +159,10 @@ export function SidePanel({ app }) {
                             ${history.length === 0 && html`<p className="text-[10px] text-gray-600 italic">No logs available.</p>`}
                             ${history.slice().reverse().map((turn, i) => html`
                                 <div key=${i} className="bg-gray-900/50 p-2 rounded border border-gray-800/50">
-                                    <div className="flex justify-between items-center mb-2"><span className="text-[10px] text-blue-400 font-bold uppercase">Turn ${history.length - i}</span></div>
+                                    <div className="flex justify-between items-center mb-2">
+                                        <span className="text-[10px] text-blue-400 font-bold uppercase">Turn ${history.length - i}</span>
+                                        ${turn.recalledPages && turn.recalledPages.length > 0 && html`<span className="text-[9px] text-purple-300" title="Older pages the GM was reminded of for this turn">Recalled p. ${turn.recalledPages.join(', ')}</span>`}
+                                    </div>
                                     ${turn.stats && html`<${TurnStats} stats=${turn.stats} />`}
                                 </div>
                             `)}

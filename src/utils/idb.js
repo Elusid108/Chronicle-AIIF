@@ -1,5 +1,6 @@
 const DB_NAME = 'chronicle';
-const DB_VERSION = 2;
+// v3 adds the per-story `recall` store (page embeddings + keyword tokens).
+const DB_VERSION = 3;
 
 // The pre-v3.3 shared "active" save id. Only the legacy migration reads it.
 export const LEGACY_ACTIVE_ID = 'active';
@@ -16,6 +17,7 @@ const openDb = () => {
             if (!db.objectStoreNames.contains('saves')) db.createObjectStore('saves');
             if (!db.objectStoreNames.contains('images')) db.createObjectStore('images');
             if (!db.objectStoreNames.contains('codexImages')) db.createObjectStore('codexImages');
+            if (!db.objectStoreNames.contains('recall')) db.createObjectStore('recall');
         };
         req.onblocked = () => {
             console.warn('Chronicle: IndexedDB upgrade blocked by another open tab. Close other Chronicle tabs.');
@@ -203,6 +205,44 @@ export const deleteCodexImagesForSave = async (saveId) => {
         if (String(key).startsWith(prefix)) store.delete(key);
     }
     await txDone(tx);
+};
+
+// ---- recall docs: `${slotId}:${00042}` -> { turnIndex, pageNumber, text, vector, tokens } ----
+
+export const recallKey = (slotId, turnIndex) => `${slotId}:${String(turnIndex).padStart(5, '0')}`;
+
+export const putRecallDoc = async (slotId, turnIndex, doc) => {
+    if (!slotId || !Number.isFinite(turnIndex) || !doc) return;
+    await idbPut('recall', doc, recallKey(slotId, turnIndex));
+};
+
+export const getRecallDocs = async (slotId) => {
+    if (!slotId) return [];
+    const db = await openDb();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction('recall', 'readonly');
+        const range = IDBKeyRange.bound(`${slotId}:`, `${slotId}:￿`);
+        const req = tx.objectStore('recall').getAll(range);
+        req.onsuccess = () => resolve((req.result || []).filter(Boolean));
+        req.onerror = () => reject(req.error);
+    });
+};
+
+const deleteRecallRange = async (lower, upper) => {
+    const db = await openDb();
+    const tx = db.transaction('recall', 'readwrite');
+    tx.objectStore('recall').delete(IDBKeyRange.bound(lower, upper));
+    await txDone(tx);
+};
+
+export const deleteRecallForSlot = async (slotId) => {
+    if (!slotId) return;
+    await deleteRecallRange(`${slotId}:`, `${slotId}:￿`);
+};
+
+export const deleteRecallFrom = async (slotId, fromIndex) => {
+    if (!slotId) return;
+    await deleteRecallRange(recallKey(slotId, Math.max(0, fromIndex)), `${slotId}:￿`);
 };
 
 export const copyCodexImageKey = async (saveId, category, fromKey, intoKey) => {

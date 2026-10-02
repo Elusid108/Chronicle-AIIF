@@ -7,8 +7,13 @@ export function SettingsPanel({ app }) {
     const {
         prefs, setPrefs, config, setConfig, setupConfig, setSetupConfig, view, mediaStatus, availableModels, modelPrefs, setModelPrefs,
         fetchModels, modelListLoading, clearApiKey, togglePanel, previewVoice, previewPlaying,
-        favorites, toggleFavorite, contextChars, downloadVerboseLog,
+        favorites, toggleFavorite, contextChars, downloadVerboseLog, recallStatus,
     } = app;
+    const recallEngineLabel = recallStatus?.embeddings === 'ok'
+        ? 'Gemini embeddings + keyword match'
+        : recallStatus?.embeddings === 'unavailable'
+            ? 'Keyword match only (embeddings unavailable for this key)'
+            : 'Gemini embeddings when available, keyword fallback';
 
     const sortedVoices = [...voicesList].sort((a, b) => {
         const aFav = favorites.includes(a);
@@ -126,6 +131,13 @@ export function SettingsPanel({ app }) {
                                 <div className="text-[9px] text-gray-600">Second pass for codex entries the GM skipped (runs only when something looks missing)</div>
                             </div>
                             <${Toggle} on=${prefs.loreBackfill !== false} onClick=${() => setPrefs({ ...prefs, loreBackfill: prefs.loreBackfill === false })} />
+                        </div>
+                        <div className="flex justify-between items-center">
+                            <div>
+                                <div className="text-xs text-gray-300">Story recall</div>
+                                <div className="text-[9px] text-gray-600">Retrieve older pages relevant to each action. ${recallEngineLabel}.</div>
+                            </div>
+                            <${Toggle} on=${prefs.storyRecall !== false} onClick=${() => setPrefs({ ...prefs, storyRecall: prefs.storyRecall === false })} />
                         </div>
                         <div>
                             <div className="flex justify-between items-center mb-1">

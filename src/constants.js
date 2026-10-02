@@ -1,4 +1,4 @@
-export const CHRONICLE_VERSION = '3.2.1';
+export const CHRONICLE_VERSION = '3.3.0';
 
 export const SCENE_FIELD_LIMITS = {
     location: 160,
